@@ -264,8 +264,9 @@ export interface RpcServerOptions {
   /** URL 前缀，默认 "rpc"（端点形如 /rpc/actions/greet） */
   prefix?: string;
   /**
-   * 静态资源目录。默认约定：{项目根}/dist/client（服务器从项目根启动，
-   * 产物 dist/client 与 dist/server 并列）。需自定义时传绝对路径或 file: URL
+   * 静态资源目录。默认约定：{项目根}/dist/clients（服务器产物在打包根 dist，
+   * 从项目根启动 `node dist/index.js` 时 ./clients 即客户端产物）。
+   * 需自定义时传绝对路径或 file: URL
    */
   staticDir?: string | URL;
   /** 监听端口，默认 process.env.PORT ?? 3000 */
@@ -286,9 +287,9 @@ export async function createRpcServer(options: RpcServerOptions) {
   const prefix = options.prefix ?? "rpc";
   const isDev = options.isDev ?? false;
   const port = options.port ?? Number(process.env.PORT ?? 3000);
-  // 静态资源基址（file: URL）：默认约定 {项目根}/dist/client；自定义时接受绝对路径或 URL。
+  // 静态资源基址（file: URL）：默认约定 {项目根}/dist/clients；自定义时接受绝对路径或 URL。
   // 必须保证以 "/" 结尾：new URL(相对, base) 相对解析把无尾斜杠的 base 末段当文件名
-  const staticDir = options.staticDir ?? join(process.cwd(), "dist", "client");
+  const staticDir = options.staticDir ?? join(process.cwd(), "dist", "clients");
   const staticRaw = staticDir instanceof URL ? staticDir.href : pathToFileURL(staticDir).href;
   const staticBase = new URL(staticRaw.endsWith("/") ? staticRaw : `${staticRaw}/`);
 

@@ -41,12 +41,12 @@ export function rpc(options: RpcPluginOptions = {}): Plugin {
     enforce: "pre",
 
     config(userConfig) {
-      // 服务器构建（--ssr，CLI 显式 --outDir dist/server）不重定向——
-      // CLI 的 outDir 已 merge 进 userConfig，再拼 client 会双重拼装（dist/server/client）
-      if (userConfig.build?.ssr) return;
-      // 客户端产物 → {outDir}/client（原始 outDir 保留为打包根，服务器产物并列）
+      // 服务器构建（--ssr）：outDir 已由 CLI 显式传入（dist 根），不再重定向；
+      // public/ 属于客户端，服务器构建不拷贝
+      if (userConfig.build?.ssr) return { build: { copyPublicDir: false } };
+      // 客户端产物 → {outDir}/clients（服务器产物在打包根 dist：index.js + assets/）
       const outDir = (userConfig.build?.outDir as string | undefined) ?? "dist";
-      return { build: { outDir: join(outDir, "client") } };
+      return { build: { outDir: join(outDir, "clients") } };
     },
 
     configResolved(resolved: ResolvedConfig) {
