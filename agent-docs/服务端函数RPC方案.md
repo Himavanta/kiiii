@@ -165,7 +165,7 @@ runtime src/rpc/server.ts（dev/prod 共用）
 
 - **createRpcServer 封装**（同一 h3 app、单端口组合四件事）：
   1. RPC：`createRpcHandler`——Rollup 构建时静态打包全部 .server.ts（各成独立 chunk），请求时 lazy 加载
-  2. 静态资源：h3 `serveStatic` + fs 后端（getMeta 用 fs.stat 提供 type/size/mtime/弱 etag，getContents 读文件）——etag/304/Last-Modified 已验证；目录默认 `../client`（相对产物定位，不依赖 cwd）
+  2. 静态资源：h3 `serveStatic` + fs 后端（getMeta 用 fs.stat 提供 type/size/mtime/弱 etag，getContents 读文件）——etag/304/Last-Modified 已验证；目录为固定约定 `{项目根}/dist/client`（服务器从项目根启动，与 dist/server 并列；需自定义时传 staticDir 绝对路径或 file: URL）
   3. SPA fallback：静态未命中 → 读 index.html 返回（history 路由）
   4. 监听：listhen（PORT 环境变量可配，默认 3000）——必须传 `toNodeHandler(app)`（h3 对象的 handler 是事件形态，直接传 app 会挂起）
 - **构建**：`pnpm build` = `tsc && vp build && vp build --ssr server/index.ts --outDir dist/server`（一步产出 dist/client + dist/server，无嵌套构建）

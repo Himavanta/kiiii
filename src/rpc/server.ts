@@ -3,6 +3,8 @@ import { HTTPError, toNodeHandler } from "h3/node";
 import type { H3Event } from "h3";
 import { listen } from "listhen";
 import { readFile, stat } from "node:fs/promises";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { parse, stringify } from "devalue";
 
 /**
@@ -223,11 +225,11 @@ function mimeFromExt(file: string): string {
 
 /**
  * serveStatic 的 fs 后端。staticBase 为静态资源目录的 file: URL。
- * id 是不透明路径（保持编码，new URL 相对解析不二次编码），安全要求见 h3 文档。
+ * id 以 "/" 开头（如 /assets/index.js），去掉前导斜杠后相对 staticBase 解析，
+ * 否则 new URL 会把它当根绝对路径（file:///assets/...）导致 stat 失败。
+ * id 保持 percent-encoded（安全要求见 h3 文档，不得解码）。
  */
 function staticBackend(staticBase: URL) {
-  // id 以 "/" 开头（如 /assets/index.js），去掉前导斜杠后相对 staticBase 解析，
-  // 否则 new URL 会把它当根绝对路径（file:///assets/...）导致 stat 失败
   const resolve = (id: string) => new URL(id.replace(/^\//, ""), staticBase);
   return {
     fallthrough: true,
@@ -262,11 +264,10 @@ export interface RpcServerOptions {
   /** URL 前缀，默认 "rpc"（端点形如 /rpc/actions/greet） */
   prefix?: string;
   /**
-   * 静态资源目录（file: URL，相对产物入口文件定位）。
-   * 入口位于产物根（如 dist/server/index.js），`new URL("../client/", import.meta.url)` 即 dist/client。
-   * 不用默认值：runtime 可能被拆到 assets/ 子目录（.server.ts 共享），相对定位不可靠，由入口显式给出最稳
+   * 静态资源目录。默认约定：{项目根}/dist/client（服务器从项目根启动，
+   * 产物 dist/client 与 dist/server 并列）。需自定义时传绝对路径或 file: URL
    */
-  staticDir: URL;
+  staticDir?: string | URL;
   /** 监听端口，默认 process.env.PORT ?? 3000 */
   port?: number;
   /** 开发模式：意外错误泄漏 message 便于调试，默认 false */
@@ -285,7 +286,11 @@ export async function createRpcServer(options: RpcServerOptions) {
   const prefix = options.prefix ?? "rpc";
   const isDev = options.isDev ?? false;
   const port = options.port ?? Number(process.env.PORT ?? 3000);
-  const staticBase = options.staticDir;
+  // 静态资源基址（file: URL）：默认约定 {项目根}/dist/client；自定义时接受绝对路径或 URL。
+  // 必须保证以 "/" 结尾：new URL(相对, base) 相对解析把无尾斜杠的 base 末段当文件名
+  const staticDir = options.staticDir ?? join(process.cwd(), "dist", "client");
+  const staticRaw = staticDir instanceof URL ? staticDir.href : pathToFileURL(staticDir).href;
+  const staticBase = new URL(staticRaw.endsWith("/") ? staticRaw : `${staticRaw}/`);
 
   // 1. RPC：.server.ts 构建时全部打包（import.meta.glob），请求时 lazy 加载分发
   const app = new H3();
