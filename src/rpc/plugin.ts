@@ -2,7 +2,8 @@ import type { Plugin, ResolvedConfig, ViteDevServer } from "vite";
 import { readdir } from "node:fs/promises";
 import { join, relative, isAbsolute } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { createApp, toNodeListener } from "h3";
+import { H3 } from "h3";
+import { toNodeHandler } from "h3/node";
 import { createRpcHandler } from "./server";
 import type { RpcModuleMap } from "./server";
 
@@ -86,9 +87,9 @@ async function handleDevRpc(
 ): Promise<void> {
   try {
     const modules = await scanServerFiles(scanRoot, server);
-    const app = createApp();
+    const app = new H3();
     app.use(createRpcHandler({ modules, prefix, isDev: true }));
-    toNodeListener(app)(req, res);
+    toNodeHandler(app)(req, res);
   } catch (error) {
     console.error("[fly-rpc] dev handler 错误:", error);
     res.statusCode = 500;

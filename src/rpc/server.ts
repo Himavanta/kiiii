@@ -1,4 +1,5 @@
-import { defineEventHandler, readRawBody, createError, setResponseStatus } from "h3";
+import { defineEventHandler } from "h3";
+import { HTTPError } from "h3/node";
 import type { H3Event } from "h3";
 import { parse, stringify } from "devalue";
 
@@ -92,12 +93,12 @@ export function createRpcHandler(options: RpcHandlerOptions) {
   return defineEventHandler(async (event) => {
     // 方法限制（协议层）
     if (event.method !== "POST") {
-      throw createError({ statusCode: 405, statusMessage: "Method Not Allowed" });
+      throw new HTTPError("Method Not Allowed", { status: 405 });
     }
 
     // 路由解析：/rpc/actions/greet → route = "actions/greet"
     if (!event.path.startsWith(`/${prefix}/`)) {
-      throw createError({ statusCode: 404, statusMessage: "Not Found" });
+      throw new HTTPError("Not Found", { status: 404 });
     }
     const route = event.path.slice(prefix.length + 2);
     // 路径消毒：拒绝空段 / 穿越段（URL 段只作为模块表的 key，不做文件系统拼接）
@@ -108,11 +109,11 @@ export function createRpcHandler(options: RpcHandlerOptions) {
       route.startsWith("/") ||
       route.endsWith("/")
     ) {
-      throw createError({ statusCode: 404, statusMessage: "Not Found" });
+      throw new HTTPError("Not Found", { status: 404 });
     }
     const loader = modules[route];
     if (!loader) {
-      throw createError({ statusCode: 404, statusMessage: "Not Found" });
+      throw new HTTPError("Not Found", { status: 404 });
     }
 
     // 取消链路：客户端断开 → abort → this.signal（函数内 throwIfAborted 提前退出）
@@ -125,25 +126,27 @@ export function createRpcHandler(options: RpcHandlerOptions) {
     }
 
     // 解析参数（devalue 编码的位置参数数组）
-    const raw = await readRawBody(event);
+    // readRawBody 在 h3 2.0 已弃用，直接用标准 Request 的 text()（无 body 时返回空串）
+    const raw = await event.req.text();
     let args: unknown[] = [];
     if (raw) {
       try {
         const parsed: unknown = parse(raw);
         if (!Array.isArray(parsed)) {
-          throw createError({ statusCode: 400, statusMessage: "Bad Request" });
+          throw new HTTPError("Bad Request", { status: 400 });
         }
         args = parsed;
       } catch (error) {
-        if (error instanceof Error && "statusCode" in error) throw error;
-        throw createError({ statusCode: 400, statusMessage: "Bad Request" });
+        // HTTPError.isError 跨上下文安全（按 constructor name 判断），与 isRpcError 同理
+        if (HTTPError.isError(error)) throw error;
+        throw new HTTPError("Bad Request", { status: 400, cause: error });
       }
     }
 
     const mod = await loader();
     const fn = mod.default;
     if (typeof fn !== "function") {
-      throw createError({ statusCode: 500, statusMessage: "Internal Server Error" });
+      throw new HTTPError("Internal Server Error", { status: 500 });
     }
 
     // 分发：context 经 this 注入，参数按位置展开（与函数声明完全一致）
@@ -154,7 +157,7 @@ export function createRpcHandler(options: RpcHandlerOptions) {
     } catch (error) {
       if (isRpcError(error)) {
         // 业务错误：开发者显式声明的错误，message/code/data 是产品的一部分（生产也传）
-        setResponseStatus(event, 200);
+        // 200 是默认状态码，无需 setResponseStatus（该 API 在 h3 2.0 已弃用）
         return stringify({
           ok: false,
           name: "RpcError",
@@ -172,7 +175,7 @@ export function createRpcHandler(options: RpcHandlerOptions) {
           message: error instanceof Error ? error.message : String(error),
         });
       }
-      throw createError({ statusCode: 500, statusMessage: "Internal Server Error" });
+      throw new HTTPError("Internal Server Error", { status: 500 });
     }
   });
 }

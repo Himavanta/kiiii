@@ -1,4 +1,4 @@
-import { t as RpcError } from "./server-GvKWy-D7.js";
+import { t as RpcError } from "./server-BlrjEieV.js";
 //#region src/api/greet.server.ts
 /**
  * 示例服务端函数：客户端 import 本文件时被替换为 fetch stub（见 src/rpc/plugin.ts），

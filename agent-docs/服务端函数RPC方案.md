@@ -266,6 +266,7 @@ Body: stringify(args)   // 位置参数数组，与函数声明完全一致
 4. **h3 2.0 的运行时上下文结构**：`event.node` 已弃用，改为 `event.runtime?.node?.res`（res 可为 undefined，需要判空）。
 5. **devalue 格式不是 JSON**：`stringify(["x"])` 输出 `[[1],"x"]` 而非 `["x"]`——curl 手测必须用 devalue 编码的 body，普通 JSON 会 400（行为正确）。
 6. **d5 的 as 断言可行**：`(async function (this: RpcContext, ...) {...}) as (name: string) => Promise<string>`——TS 允许（函数类型兼容性中 this 参数在目标无标注时被忽略），函数内部 this 类型完整。
+7. **h3 2.0 deprecated API 清理（LSP/类型核对驱动）**：`createApp` → `new H3()`；`createError` → `new HTTPError(...)`；`setResponseStatus` → 直接依赖默认 200（删除调用）；`toNodeListener` → `h3/node` 的 `toNodeHandler`（主包导出的 toNodeHandler 也已弃用）；`readRawBody` → `event.req.text()`（标准 Request 读取，无 body 时返回空串而非 undefined，`if (raw)` 判断兼容）。注意：**HTTPError 从 `h3/node` 导入**——主包（index.d.mts）类型声明漏导出了 HTTPError（RC 缺口，运行时存在、类型缺失）；`HTTPError.isError` 按 constructor name 判断、跨上下文安全（与 isRpcError 同思路，可直接用于 parse 错误分支）。
 
 - "AST 提取不是必需"——两个参考库都证明运行时加载 + 遍历即可，AST 只服务于"构建时静态生成代码"这一特定需求。
 - "前置包裹"方案有一个 ESM 坑：transform 注入的代码拿不到导出列表（顶部 TDZ / 尾部仍需写导出名）；文件即函数约定直接绕过了这个问题。

@@ -1,4 +1,5 @@
-import { createApp, defineEventHandler, serveStatic, toNodeHandler } from "h3";
+import { H3, defineEventHandler, serveStatic } from "h3";
+import { toNodeHandler } from "h3/node";
 import { listen } from "listhen";
 import { readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -74,7 +75,7 @@ function mimeFromExt(file: string): string {
 }
 
 /** 1. RPC：.server.ts 在构建时全部打包，请求时 lazy 加载 */
-const app = createApp();
+const app = new H3();
 app.use(
   "/rpc/**",
   createRpcHandler({

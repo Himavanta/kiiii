@@ -1,5 +1,6 @@
-import { n as createRpcHandler, r as fromGlob } from "./assets/server-GvKWy-D7.js";
-import { createApp, defineEventHandler, serveStatic, toNodeHandler } from "h3";
+import { n as createRpcHandler, r as fromGlob } from "./assets/server-BlrjEieV.js";
+import { H3, defineEventHandler, serveStatic } from "h3";
+import { toNodeHandler } from "h3/node";
 import { listen } from "listhen";
 import { readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -68,13 +69,13 @@ function mimeFromExt(file) {
     : "application/octet-stream";
 }
 /** 1. RPC：.server.ts 在构建时全部打包，请求时 lazy 加载 */
-var app = createApp();
+var app = new H3();
 app.use(
   "/rpc/**",
   createRpcHandler({
     modules: fromGlob(
       /* #__PURE__ */ Object.assign({
-        "/src/api/greet.server.ts": () => import("./assets/greet.server-AJxBFkA7.js"),
+        "/src/api/greet.server.ts": () => import("./assets/greet.server-DjEvGmPy.js"),
       }),
     ),
   }),

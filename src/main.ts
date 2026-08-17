@@ -8,8 +8,7 @@ import greet from "./api/greet.server.ts";
 
 // RPC 调用示例：与普通函数调用无区别（类型来自原文件签名）
 // 取消：const p = greet("World"); rpcCancel(p, "用户取消了");
-const promise = greet("World");
-const result = await promise;
+const result = await greet("World");
 
 document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
 <section id="center">

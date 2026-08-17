@@ -1,4 +1,5 @@
-import { createError, defineEventHandler, readRawBody, setResponseStatus } from "h3";
+import { defineEventHandler } from "h3";
+import { HTTPError } from "h3/node";
 import { parse, stringify } from "devalue";
 //#region src/rpc/server.ts
 /**
@@ -59,16 +60,8 @@ function createRpcHandler(options) {
   const prefix = options.prefix ?? "rpc";
   const isDev = options.isDev ?? false;
   return defineEventHandler(async (event) => {
-    if (event.method !== "POST")
-      throw createError({
-        statusCode: 405,
-        statusMessage: "Method Not Allowed",
-      });
-    if (!event.path.startsWith(`/${prefix}/`))
-      throw createError({
-        statusCode: 404,
-        statusMessage: "Not Found",
-      });
+    if (event.method !== "POST") throw new HTTPError("Method Not Allowed", { status: 405 });
+    if (!event.path.startsWith(`/${prefix}/`)) throw new HTTPError("Not Found", { status: 404 });
     const route = event.path.slice(prefix.length + 2);
     if (
       !route ||
@@ -77,43 +70,28 @@ function createRpcHandler(options) {
       route.startsWith("/") ||
       route.endsWith("/")
     )
-      throw createError({
-        statusCode: 404,
-        statusMessage: "Not Found",
-      });
+      throw new HTTPError("Not Found", { status: 404 });
     const loader = modules[route];
-    if (!loader)
-      throw createError({
-        statusCode: 404,
-        statusMessage: "Not Found",
-      });
+    if (!loader) throw new HTTPError("Not Found", { status: 404 });
     const controller = new AbortController();
     const res = event.runtime?.node?.res;
     if (res) res.on("close", () => controller.abort());
-    const raw = await readRawBody(event);
+    const raw = await event.req.text();
     let args = [];
     if (raw)
       try {
         const parsed = parse(raw);
-        if (!Array.isArray(parsed))
-          throw createError({
-            statusCode: 400,
-            statusMessage: "Bad Request",
-          });
+        if (!Array.isArray(parsed)) throw new HTTPError("Bad Request", { status: 400 });
         args = parsed;
       } catch (error) {
-        if (error instanceof Error && "statusCode" in error) throw error;
-        throw createError({
-          statusCode: 400,
-          statusMessage: "Bad Request",
+        if (HTTPError.isError(error)) throw error;
+        throw new HTTPError("Bad Request", {
+          status: 400,
+          cause: error,
         });
       }
     const fn = (await loader()).default;
-    if (typeof fn !== "function")
-      throw createError({
-        statusCode: 500,
-        statusMessage: "Internal Server Error",
-      });
+    if (typeof fn !== "function") throw new HTTPError("Internal Server Error", { status: 500 });
     const context = {
       signal: controller.signal,
       event,
@@ -122,8 +100,7 @@ function createRpcHandler(options) {
       const result = await fn.call(context, ...args);
       return stringify(result);
     } catch (error) {
-      if (isRpcError(error)) {
-        setResponseStatus(event, 200);
+      if (isRpcError(error))
         return stringify({
           ok: false,
           name: "RpcError",
@@ -131,7 +108,6 @@ function createRpcHandler(options) {
           code: error.code,
           data: error.data,
         });
-      }
       console.error(`[fly-rpc] ${route} 执行失败:`, error);
       if (isDev)
         return stringify({
@@ -139,10 +115,7 @@ function createRpcHandler(options) {
           name: "Error",
           message: error instanceof Error ? error.message : String(error),
         });
-      throw createError({
-        statusCode: 500,
-        statusMessage: "Internal Server Error",
-      });
+      throw new HTTPError("Internal Server Error", { status: 500 });
     }
   });
 }
