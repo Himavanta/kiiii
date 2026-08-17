@@ -4,6 +4,13 @@ import viteLogo from "./assets/vite.svg";
 import heroImg from "./assets/hero.png";
 import { setupCounter } from "./counter.ts";
 
+import greet from "./api/greet.server.ts";
+
+// RPC 调用示例：与普通函数调用无区别（类型来自原文件签名）
+// 取消：const p = greet("World"); rpcCancel(p, "用户取消了");
+const promise = greet("World");
+const result = await promise;
+
 document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
 <section id="center">
   <div class="hero">
@@ -14,6 +21,7 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
   <div>
     <h1>Get started</h1>
     <p>Edit <code>src/main.ts</code> and save to test <code>HMR</code></p>
+    <p class="rpc-result">RPC 结果：<code>${result}</code></p>
   </div>
   <button id="counter" type="button" class="counter"></button>
 </section>

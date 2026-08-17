@@ -10,9 +10,11 @@
     "prepare": "vp config"
   },
   "dependencies": {
-    "@thednp/rpc": "^0.2.1"
+    "devalue": "^5.9.0",
+    "h3": "2.0.1-rc.26"
   },
   "devDependencies": {
+    "@types/node": "^26.2.0",
     "typescript": "~6.0.2",
     "vite": "catalog:",
     "vite-plus": "catalog:"

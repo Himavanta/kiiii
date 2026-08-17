@@ -70,19 +70,21 @@
 
 ### D5：上下文通过 `this` 注入（TS this 参数）
 
-- 服务端函数用 TS 的 this 参数声明上下文依赖：
+- 服务端函数用 TS 的 this 参数声明上下文依赖，末尾用 **as 断言**剥除 this 参数（纯编译期操作，无任何运行时包装）：
 
 ```ts
 import type { RpcContext } from "@/framework/rpc";
 
-export default function (this: RpcContext, name: string) {
+export default (function (this: RpcContext, name: string) {
   this.signal.throwIfAborted();
   this.user.id; // 中间件注入的数据
   return `Hello ${name}`;
-}
+} as (name: string) => Promise<string>);
 ```
 
-- `this: RpcContext` 是**假参数**：不占参数位、调用方不可见、编译后消失；调用 `greet("World")` 类型照常通过，函数签名保持纯业务参数。
+- `this: RpcContext` 是**假参数**：不占参数位、调用方不可见、编译后消失。
+- **为什么需要 as 断言**：TS 规定带 this 参数的函数做自由调用（`greet("World")`）会报 TS2684（this 上下文 void 不可赋给 RpcContext）——函数体内要 this 的类型、调用方又不该传 this，TS 不允许同一签名同时满足两者。as 断言在类型层剥除 this 参数（编译期，运行时零痕迹），函数内部仍持有完整 `this: RpcContext` 类型。
+- 实现阶段明确：**不能用任何包装函数**（即使运行时恒等）——这是与用户达成的边界；`as FunctionType` 可接受。
 - 分发时注入：`await fn.call(context, ...args)`。
 - context 对象统一承载：`AbortSignal`、H3Event（request/headers/cookies）、中间件挂载的用户态等。
 - 红利：
@@ -90,7 +92,7 @@ export default function (this: RpcContext, name: string) {
   2. **中间件融合天然**——h3 middleware 往 context 挂 `user`，函数里 `this.user` 直接读，不需要 rpc-master 的 "locals bridge"。
   3. 类型一致性不破坏：客户端看到的原文件签名中 this 参数不参与调用类型，stub 返回数据本身，行为与签名一致。
 - 约束：
-  1. **必须 function 声明**（箭头函数无自己的 this），lint 强制；
+  1. **必须 function 表达式**（箭头函数无自己的 this），lint 强制；
   2. 每函数一行 `import type { RpcContext }`（可考虑全局类型声明）；
   3. 服务端直调（SSR/测试）需 `fn.call(createContext(), ...)`，约定 context 工厂；
   4. `strict` 下不标注 this 会报错，正好强制显式声明上下文依赖。
@@ -241,6 +243,15 @@ Body: stringify(args)   // 位置参数数组，与函数声明完全一致
 - "错误协议"：两类失败分开——协议错误走状态码，业务错误走 RpcError 信封（stub reject 保持 try/catch 与本地调用一致）；普通 throw 的意外错误不跨网络；与 rpc-master 的分歧在于业务错误生产也传（产品的一部分），而非按环境区分。
 - "取消"：服务端 this.signal 必做（连接断开自动 abort）；客户端 per-call cancel 在"类型来自原文件"下无法类型安全暴露（Promise<T> 无 cancel），rpc-master 的 { data, cancel } 正是为类型安全暴露取消付出的包装代价——折中为全局超时 + rpcCancel(p) 辅助函数。
 - "prod 加载"：import.meta.glob 是标准答案——Rollup 静态打包 + dev lazy 加载 HMR 失效，dev/prod 同一份代码；由此路由定为"相对 scanRoot 路径"而非纯文件名（防递归同名冲突）。
+
+## 实现阶段的坑（初始版本已踩平，备忘）
+
+1. **Connect use(path) 会剥前缀**：`server.middlewares.use("/rpc", fn)` 会把 req.url 改写为去掉前缀的剩余路径，h3 的 event.path 丢失 /rpc → 路由 404。须用无路径中间件 + 手动判断前缀。
+2. **IncomingMessage 的 close 在请求正常完成后也触发**：监听 req close 会把进行中的调用误中止（"This operation was aborted"）。应监听 res 的 close——只在连接于响应结束前关闭（客户端断开）时触发。
+3. **dev 模块双实例使 instanceof 失效**：plugin（配置加载链）与 .server.ts（ssrLoadModule 链）各加载一份 server.ts，RpcError instanceof 跨实例为 false → 业务错误误入意外错误分支。用 name 品牌判断（`isRpcError`）解决。
+4. **h3 2.0 的运行时上下文结构**：`event.node` 已弃用，改为 `event.runtime?.node?.res`（res 可为 undefined，需要判空）。
+5. **devalue 格式不是 JSON**：`stringify(["x"])` 输出 `[[1],"x"]` 而非 `["x"]`——curl 手测必须用 devalue 编码的 body，普通 JSON 会 400（行为正确）。
+6. **d5 的 as 断言可行**：`(async function (this: RpcContext, ...) {...}) as (name: string) => Promise<string>`——TS 允许（函数类型兼容性中 this 参数在目标无标注时被忽略），函数内部 this 类型完整。
 
 - "AST 提取不是必需"——两个参考库都证明运行时加载 + 遍历即可，AST 只服务于"构建时静态生成代码"这一特定需求。
 - "前置包裹"方案有一个 ESM 坑：transform 注入的代码拿不到导出列表（顶部 TDZ / 尾部仍需写导出名）；文件即函数约定直接绕过了这个问题。
