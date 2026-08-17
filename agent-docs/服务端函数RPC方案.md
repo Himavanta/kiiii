@@ -1,0 +1,248 @@
+# fly-generally 服务端函数 RPC 方案
+
+> 状态：设计草案（协议细节待定）
+> 日期：2026-02
+> 背景：fly-generally 使用自己的前端框架，需要一种"写服务端函数、客户端无缝调用"的 RPC 能力。
+
+---
+
+## 1. 背景与目标
+
+- 开发者有自己的前端框架，希望获得类似 server actions 的能力：在 `.server.ts` 文件中写服务端函数，客户端代码直接 import 并调用，底层由 Vite 插件转换为 HTTP 请求。
+- 调研了社区两个同类库（见 §2），结论是核心机制并不复杂，复杂性来自**通用场景覆盖**和**外围增值功能**。本方案只服务自身框架，不做通用抽象。
+- 目标：核心 300 行左右的极简实现，无 AST 解析、无运行时函数包装、无多框架适配。
+
+## 2. 参考项目分析
+
+### 2.1 @thednp/rpc（rpc-master，仓库本地副本）
+
+- 核心源码约 2000 行，其中真正的核心只有几百行：
+  - `getClientModules.ts`（113 行）：构建时生成客户端 fetch stub 字符串
+  - `createFunction.ts`（65 行）：`createServerFunction` 包装，模块加载时副作用注册进全局 map
+  - `scanForServerFiles.ts`（155 行）：文件发现，**运行时加载模块 + `Object.entries` 遍历导出**，零 AST
+  - h3 adapter（244 行）：请求分发
+- 复杂度来源：
+  1. 5 个框架适配器（express/fastify/h3/hono/koa）
+  2. SSR 同构双态处理（同一模块在服务端真实执行、客户端替换为 stub，transform 中靠 `ops.ssr` 跳过）
+  3. 安全加固（前缀锚定正则、生成代码标识符校验、通用错误响应）
+  4. `createServerFunction` 包装承担三个职责：注册副作用、同构调用形状 `{ data, cancel }`、类型传播（返回类型携带 handler 泛型签名）
+- 类型方案：编辑器/tsc 解析磁盘原文件（transform 只改运行时产物），`createServerFunction` 的返回类型把签名从 handler 泛型传播到客户端；stub 运行时也返回 `{ data, cancel }`，类型与行为严格一致。
+
+### 2.2 vite-plugin-server-actions（当前工作目录旁，仓库本地副本）
+
+- 共约 4900 行，但分布极不均匀：验证体系约 790 行（Zod）、OpenAPI 454 行、类型生成 416 行、AST 解析 621 行、错误增强约 555 行——**这些全是外围功能**。
+- 函数形态正是"裸 async 函数 + `.server.ts` 后缀"，与用户最初设想一致。
+- AST 解析只服务于一个目的：**生产构建时静态生成独立 Express 服务器代码**（路由表 + 函数体字符串拼进 `dist/server.js`）。dev 模式同样是运行时 import + 遍历导出。
+- 结论：**如果不生成独立服务器（自己有 h3），AST 需求消失**。
+
+### 2.3 启示
+
+- AST 提取不是必需：运行时加载模块 + 遍历导出即可获得函数（rpc-master 证明）。
+- 库的复杂性来自"服务所有部署形态"（SPA 无服务器 / SSR / 各种框架 / monorepo…）。**只服务一个场景的方案可以比库简单一个量级**。
+- 生成代码时所有插值（函数名、前缀）必须校验，防代码注入；URL 段 → 文件路径映射必须防路径穿越。
+
+## 3. 核心设计决策
+
+### D1：文件即函数 —— 每个 `.server.ts` 只导出 `export default`
+
+- 一个文件 = 一个服务端函数（MVP）。
+- **路由 = 相对 scanRoot 的路径**（保留目录层级）：`src/actions/greet.server.ts` → `POST /rpc/actions/greet`（去掉 `.server` 后缀）。用路径而非纯文件名，避免 glob 递归下的同名冲突（`src/actions/todo.server.ts` vs `src/admin/todo.server.ts`）。
+- 红利：客户端 stub 不需要知道导出列表（default 约定，本地名用户自取）；服务端注册表退化为"路由名 → 文件路径"；**连构建时的模块加载和导出遍历都省了**，加载延迟到请求时。
+- 扩展预留：default 导出对象时路由加方法段（`/rpc/:name/:method`），MVP 不做。
+
+### D2：虚拟模块机制 —— 用 `resolveId` + `load`，不用 `transform`
+
+- 参考 Vite 对 `?worker` / `?wasm` / `?raw` 的处理：`resolveId` 把导入重写为 `\0` 前缀虚拟 id，`load` 返回生成的内存模块代码。
+- 客户端 `import greet from "./greet.server.ts"` → `resolveId` 拦截（`!options.ssr` 时）→ 虚拟模块 stub。
+- 服务端（h3 handler）加载**同一个路径** → `ssrLoadModule` 原文件 → 真实函数。
+- **同一个字符串路径，两侧各得其所，互不污染**；原文件不进客户端 bundle，服务端专用依赖天然不泄漏。
+
+### D3：零 AST、零包装、运行时加载
+
+- 不解析源码、不需要 `createServerFunction` 包装、不需要模块加载副作用注册。
+- dev 下请求到来时 `server.ssrLoadModule(path)` 加载（走 Vite 模块图，自动处理 TS 转换、模块缓存、HMR 失效——**这是本方案唯一会咬人的细节**，不能用 Node 原生动态 import）。
+- prod 下由 h3 服务器直接 import 已打包的模块。
+
+### D4：只适配 h3
+
+- 不建 adapter 抽象层。dev 模式 `configureServer` 直接挂 h3 handler；prod 模式用户在服务器中注册同一个 handler。
+- 注意（参考 rpc-master 的已知行为）：dev 下 Vite 内部是 Connect middleware，h3 的 `toNodeListener` / `fromNodeMiddleware` 负责桥接。
+
+### D5：上下文通过 `this` 注入（TS this 参数）
+
+- 服务端函数用 TS 的 this 参数声明上下文依赖：
+
+```ts
+import type { RpcContext } from "@/framework/rpc";
+
+export default function (this: RpcContext, name: string) {
+  this.signal.throwIfAborted();
+  this.user.id; // 中间件注入的数据
+  return `Hello ${name}`;
+}
+```
+
+- `this: RpcContext` 是**假参数**：不占参数位、调用方不可见、编译后消失；调用 `greet("World")` 类型照常通过，函数签名保持纯业务参数。
+- 分发时注入：`await fn.call(context, ...args)`。
+- context 对象统一承载：`AbortSignal`、H3Event（request/headers/cookies）、中间件挂载的用户态等。
+- 红利：
+  1. **省掉 AsyncLocalStorage**——rpc-master 用 231 行 `context.ts`（provideRequestContext/getRequestContext）在异步栈传递请求上下文，是因为它的 signal 占了第一个参数位、上下文没地方放；this 方案显式传入，不需要 ALS。
+  2. **中间件融合天然**——h3 middleware 往 context 挂 `user`，函数里 `this.user` 直接读，不需要 rpc-master 的 "locals bridge"。
+  3. 类型一致性不破坏：客户端看到的原文件签名中 this 参数不参与调用类型，stub 返回数据本身，行为与签名一致。
+- 约束：
+  1. **必须 function 声明**（箭头函数无自己的 this），lint 强制；
+  2. 每函数一行 `import type { RpcContext }`（可考虑全局类型声明）；
+  3. 服务端直调（SSR/测试）需 `fn.call(createContext(), ...)`，约定 context 工厂；
+  4. `strict` 下不标注 this 会报错，正好强制显式声明上下文依赖。
+- 为什么 rpc-master 用不了：`createServerFunction` 包装层会吞掉 this，只能走"第一个参数 + ALS"路线；裸函数方案天然拥有这个自由度。
+
+### D6：stub 返回数据本身，类型免费一致
+
+- 客户端 stub：`export default (...args) => fetch(...)` 返回**数据本身**（`Promise<T>`）。
+- 编辑器/tsc 解析 `import greet from "./greet.server.ts"` 看到的是磁盘原文件，`greet` 类型 = 服务端函数签名（`(...args) => Promise<T>`）。
+- stub 行为与签名一致 → 类型一致性免费获得，不需要 rpc-master 的 `{ data, cancel }` 包装形状。
+- 前提约定：参数与返回值必须 JSON 可序列化。
+
+### D7：传输编码用 devalue（stringify/parse），不用 JSON
+
+- 原因：JSON 在 RPC 下有**类型谎言**——函数声明返回 `Date`，JSON 序列化后客户端拿到字符串，TS 类型说 Date、运行时是 string；`undefined`→null、Map/Set→{}、循环引用直接 throw，且全部**静默变形不报错**。
+- devalue（Svelte 团队，SvelteKit 生产在用）解决：`Date` 还原为 `Date`、`Map`/`Set`/`BigInt`/`undefined`/`NaN`/`Infinity`/`-0`/`ArrayBuffer`/`URL`/`URLSearchParams`/`Temporal` 全部保真，循环引用支持且保共享引用。
+- 坏值处理：遇到函数或未注册类实例**显式抛错**并带 `error.path`（比 JSON 的静默变形报错质量更高）。
+- 安全：用 `stringify` + `parse`（不是 `uneval`）。`parse` 是手写解析器不执行代码，可处理不可信输入；README 的客户端→服务端警告只针对 `uneval` 的 eval 场景。输出转义 `</script>` 等序列，天然防 XSS。
+- 约束升级：T1 的"必须 JSON 可序列化"→"devalue 可序列化"。
+- 代价：协议不再是标准 JSON（Content-Type 用 text/plain，h3 端 `readRawBody` 后 parse）；两端都要引入依赖（体积很小）；性能略低于 JSON（小数据无感）；自定义类实例仍需 reducer/reviver 两端登记约定（MVP 用内置类型即可）。
+
+## 4. 架构设计（草案）
+
+> 编号说明：D5 为上下文注入决策，D6 为类型决策（原 D5 顺延）。
+
+### 4.1 模块划分
+
+```
+Vite 插件（vite.config.ts 注册，约 80 行）
+  ├─ resolveId(source, importer, options)
+  │     source 以 .server.ts 结尾 && !options.ssr → 返回虚拟 id
+  ├─ load(id)
+  │     是虚拟 id → 返回 stub 字符串
+  └─ configureServer(server)
+        server.middlewares.use(rpcHandler)   // dev 接线
+
+h3 handler（dev/prod 共用，约 120 行）
+  ├─ 初始化：import.meta.glob("/src/**/*.server.ts") 构建路由表（T4，已定）
+  │     prod: Rollup 静态打包全部匹配文件，构建时已知全部路由
+  │     dev: lazy 加载，请求时 await 触发 Vite 按需转换，HMR 自动失效
+  ├─ POST /rpc/:path
+  │     查表 → const mod = await modules[path]() → const fn = mod.default
+  │     → await fn.call(context, ...args) → stringify 响应
+  ├─ 取消（T3，已定）：每请求一个 AbortController
+  │     event.node.req.on("close", () => controller.abort()) + 可配超时
+  │     context.signal = controller.signal（函数内 this.signal 读取）
+  └─ 错误边界：通用错误响应（生产不泄漏堆栈/消息）
+```
+
+### 4.2 dev 接线
+
+- `configureServer` 中挂 handler；`import.meta.glob` 的 lazy 加载 + Vite 模块图负责 TS 转换、模块缓存与 HMR 失效（**这是本方案唯一会咬人的细节，不能裸动态 import**）。
+
+### 4.3 prod 接线
+
+- 用户自己的 h3 服务器注册同一 handler；`.server.ts` 由 Rollup 通过 `import.meta.glob` 静态分析打包进服务器 bundle（T4，已定），无需额外入口、无需运行时文件系统扫描。
+
+### 4.4 请求协议（草案，待定项见 §6）
+
+```
+POST /rpc/:name
+Content-Type: text/plain（devalue 编码，非 JSON）
+Body: stringify(args)   // 位置参数数组，与函数声明完全一致
+
+成功: 200 + stringify(result)          // 不包信封，纯数据
+业务错误: 200 + stringify({ ok: false, name, message, code?, data? })
+传输/协议错误: 非 2xx + 通用错误体（见下）
+```
+
+错误协议（T2，已定）：**两类失败分开**。
+
+传输/协议错误（调用没发生，stub 内部处理，客户端拿到通用 Error）：
+
+- 404 函数不存在 / 405 方法不允许 / 400 body 解析失败 / 413 超限 / 500 意外错误
+- 生产恒通用错误体（不泄漏堆栈/路径/消息），dev 可泄漏 message 便于调试
+
+业务错误（调用发生了，函数 throw）：
+
+- 仅 `throw new RpcError(message, code?, data?)` 的信息跨网络：200 + 信封，stub 检测后 reject 一个带 `code`/`data` 属性的 Error，客户端 `try/catch` 与本地调用一致
+- **普通 throw 的 Error（bug/意外）不跨网络**：生产 500 通用体，dev 泄漏 message
+- 与 rpc-master 的有意识分歧：业务错误是产品的一部分（如"用户名已存在"），生产也必须到达客户端；边界按错误类型（RpcError vs 意外）区分，而非按环境（dev vs prod）区分
+- 客户端不引入 RpcError 类，reject 的 Error 挂属性即可：`catch (e) { if (e.code === "EMPTY_NAME") }`
+- 网络层失败（断网/超时）：fetch 原生 reject，stub 可挂 `isNetworkError` 标记（MVP 可选）
+
+取消机制（T3，已定）：服务端必做 + 客户端分层。
+
+- 服务端（必做）：每请求一个 AbortController，`event.node.req.on("close", () => controller.abort())` + 可配超时；`context.signal` 供 `this.signal.throwIfAborted()` 提前退出（函数作者配合）。
+- 客户端（MVP）：全局超时配置，stub 挂 `AbortSignal.timeout(ms)`，防挂起覆盖主要诉求。
+- 用户主动取消（可选）：类型安全的辅助函数 `rpcCancel(p, reason)`——stub 内部把 controller 挂私有 Symbol，辅助函数取出后 abort。
+- 为什么不做 `p.cancel()`：类型来自原文件（`Promise<T>` 上没有 cancel），per-call 方法无法类型安全暴露；rpc-master 的 `{ data, cancel }` 形状正是为类型安全暴露取消才付出的包装代价。
+
+参数协议（T1，已定）：**位置参数，无格式限制**。
+
+- 函数怎么声明，客户端就怎么调用——与标准 TS 函数调用无任何区别；传输层固定为 `args` 数组（发出 `stringify(args)`，服务端 `parse` 后 `fn.call(ctx, ...args)`）。
+- 默认参数/可选参数/rest/解构全部天然工作：服务端执行的是原函数本身，TS 特性在"普通函数调用"下零成本成立。
+- 类型约束：参数与返回值必须 devalue 可序列化（见 D7）——Date/Map/Set/undefined/循环引用等全部保真，类型与运行时一致；函数与未注册类实例会显式抛错（`error.path` 定位）。
+
+## 5. 类型方案
+
+- 客户端类型：原文件签名（见 D5）。
+- `import type { X } from "./xxx.server.ts"` 的命名类型导入：构建时被 esbuild 剥离，不影响构建；编辑器解析原文件也正常。
+- 约束：值导入只允许 default（用 lint 规则强制，见 §6 T5）。
+
+## 6. 已知取舍与边界
+
+| 取舍                   | 说明                                                                                                                              |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| 一个文件一个函数       | 相关操作拆文件（`todo.add.server.ts`）或后续扩展对象导出                                                                          |
+| 改名 = 改路由          | 文件名是公开 API 面，发布后不可乱改（不做 rpc-master 的"导出名与路由名分离"灵活性）                                               |
+| 取消                   | 服务端 this.signal 必做（连接断开 + 超时自动 abort）；客户端超时 MVP；主动取消走 `rpcCancel(p)` 辅助函数，`p.cancel()` 类型不干净 |
+| 函数必须 function 声明 | 箭头函数无 this，`.server.ts` 的 default 导出 lint 强制为 function 声明                                                           |
+| 服务端直调需 context   | SSR/测试中直接调用函数须 `fn.call(createContext(), ...)`，约定 context 工厂                                                       |
+| 参数/返回值序列化约束  | devalue 可序列化（D7）：内置复杂类型保真，函数/未注册类实例显式抛错（error.path 定位）                                            |
+| 错误边界               | RpcError 显式声明的错误跨网络（生产也传，业务错误是产品的一部分）；意外错误不泄漏（生产恒 500 通用体）                            |
+| 路径消毒               | URL 段 → 文件路径映射必须白名单校验 + 拒绝 `..`（参考两个参考库的 security 实现）                                                 |
+| 代码注入防护           | stub 生成时插值的路径段/前缀必须校验标识符与路径字符                                                                              |
+| dev 加载必须走 Vite    | 原生动态 import 不知道 Vite 转换与缓存，会踩模块缓存/HMR 坑                                                                       |
+
+## 7. 待定问题（T5）
+
+> T1（参数传递格式）已定：位置参数，怎么声明怎么调用，传输为 devalue 数组（见 §4.4）。
+> T2（错误返回协议）已定：两类失败分开——传输/协议错误走非 2xx 通用体，业务错误走 200 + RpcError 信封（见 §4.4）。
+> T3（取消机制）已定：服务端 this.signal 必做 + 客户端超时 MVP + `rpcCancel(p)` 辅助（见 §4.4）。
+> T4（prod 加载形态）已定：`import.meta.glob` 静态打包 + lazy 加载，dev/prod 同一份代码（见 §4.1）。
+
+- **T5 lint 规则**：oxlint 强制 `import x from "*.server.ts"` 仅 default 值导入（`no-restricted-imports` 或自定义规则，实现时定）。
+
+## 8. 与参考库的对比
+
+|                | @thednp/rpc                       | vite-plugin-server-actions | 本方案                           |
+| -------------- | --------------------------------- | -------------------------- | -------------------------------- |
+| 服务端函数形态 | `createServerFunction` 运行时包装 | 裸 async 函数              | 裸 async 函数（export default）  |
+| 导出发现       | 运行时加载 + 遍历导出             | dev 运行时 / prod AST      | **不需要**（文件即函数）         |
+| 客户端替换     | transform 整体替换                | transform + AST            | **虚拟模块（resolveId + load）** |
+| 路由           | 注册名（显式声明）                | 路径 + 函数名              | **文件名**                       |
+| 框架适配       | 5 个 adapter                      | 自带独立 Express 服务器    | **仅 h3**                        |
+| 验证/OpenAPI   | 无                                | 内置 Zod + OpenAPI         | 无（自己的框架自己定）           |
+| 类型           | 包装函数返回类型传播              | 生成 .d.ts                 | **原文件签名免费一致**           |
+| 复杂度         | 通用库级                          | 全功能级                   | 300 行核心级                     |
+
+---
+
+## 附：讨论中的关键结论（备忘）
+
+- "上下文放 this"：TS 的 this 参数是假参数（不占位、编译后消失），`fn.call(context, ...args)` 注入即可；顺带省掉 AsyncLocalStorage 和中间件 locals 桥——rpc-master 用 231 行 + 一套 API 解决的问题，裸函数 + this 方案里不存在。
+- "参数无格式限制"：位置参数 + 传输数组，函数声明与标准 TS 完全一致；默认/可选/rest/解构参数全部零成本工作，因为服务端执行的就是原函数本身。
+- "传输编码"：JSON 有类型谎言（Date→string 静默变形），devalue 的 stringify/parse 保真全部内置复杂类型且显式报错——"怎么声明怎么调用、类型与运行时一致"的完整答案。
+- "错误协议"：两类失败分开——协议错误走状态码，业务错误走 RpcError 信封（stub reject 保持 try/catch 与本地调用一致）；普通 throw 的意外错误不跨网络；与 rpc-master 的分歧在于业务错误生产也传（产品的一部分），而非按环境区分。
+- "取消"：服务端 this.signal 必做（连接断开自动 abort）；客户端 per-call cancel 在"类型来自原文件"下无法类型安全暴露（Promise<T> 无 cancel），rpc-master 的 { data, cancel } 正是为类型安全暴露取消付出的包装代价——折中为全局超时 + rpcCancel(p) 辅助函数。
+- "prod 加载"：import.meta.glob 是标准答案——Rollup 静态打包 + dev lazy 加载 HMR 失效，dev/prod 同一份代码；由此路由定为"相对 scanRoot 路径"而非纯文件名（防递归同名冲突）。
+
+- "AST 提取不是必需"——两个参考库都证明运行时加载 + 遍历即可，AST 只服务于"构建时静态生成代码"这一特定需求。
+- "前置包裹"方案有一个 ESM 坑：transform 注入的代码拿不到导出列表（顶部 TDZ / 尾部仍需写导出名）；文件即函数约定直接绕过了这个问题。
+- "库的复杂 vs 自用简单"的本质：库要为所有部署形态做抽象（adapter、配置、fallback），应用内代码只需要一种形态，写死即可。
+- dev 下模块缓存/HMR 是唯一会咬人的实现细节，必须走 `ssrLoadModule`（Vite 模块图），不能裸 `import()`。
