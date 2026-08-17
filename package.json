@@ -6,12 +6,17 @@
   "scripts": {
     "dev": "vp dev",
     "build": "tsc && vp build",
+    "build:server": "vp build --ssr server/index.ts --outDir dist-server",
+    "build:all": "pnpm build && pnpm build:server",
+    "start": "node dist-server/index.js",
     "preview": "vp preview",
     "prepare": "vp config"
   },
   "dependencies": {
     "devalue": "^5.9.0",
-    "h3": "2.0.1-rc.26"
+    "h3": "2.0.1-rc.26",
+    "listhen": "^1.10.1",
+    "srvx": "^0.12.5"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",

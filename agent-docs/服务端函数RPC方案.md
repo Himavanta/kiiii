@@ -63,10 +63,16 @@
 - dev 下请求到来时 `server.ssrLoadModule(path)` 加载（走 Vite 模块图，自动处理 TS 转换、模块缓存、HMR 失效——**这是本方案唯一会咬人的细节**，不能用 Node 原生动态 import）。
 - prod 下由 h3 服务器直接 import 已打包的模块。
 
-### D4：只适配 h3
+### D4：只适配 h3（框架选择决策：h3 2.0，而非 Hono）
 
 - 不建 adapter 抽象层。dev 模式 `configureServer` 直接挂 h3 handler；prod 模式用户在服务器中注册同一个 handler。
-- 注意（参考 rpc-master 的已知行为）：dev 下 Vite 内部是 Connect middleware，h3 的 `toNodeListener` / `fromNodeMiddleware` 负责桥接。
+- 注意：dev 下 Vite 内部是 Connect middleware，h3 的 `toNodeListener` 负责桥接（当前实现：无路径中间件 + 手动判断前缀 + 每请求重建临时 h3 app，见"实现阶段的坑"第 1 条）。
+- **为什么是 h3 2.0 而非 Hono**（2026-02 讨论定论）：
+  1. **官方维护的状态流**（决定性）：h3 的 `toNodeListener` 是 unjs 官方维护、nitro 生态大规模验证过的 Connect 适配；Hono 官方没有 connect 形态的适配（`@hono/node-server` 是 serve 形态自监听端口，`@hono/vite-dev-server` 是"服务端常驻入口"模式，与我们的"请求时懒加载 .server.ts"架构冲突）——换 Hono 意味着自写 node↔web 转换层并自行维护其正确性，边缘情况包括：set-cookie 多值头丢失、请求体 stream 中断传播、响应 streaming 破坏、Node 下取消信号的正确接线、404/错误兕底语义、chunked/keep-alive 生命周期。这个账不划算。
+  2. **h3 2.0 RC 即主线**：Nitro v3（生产级，Nuxt 服务端）就基于 H3 v2，并采用 web-standard Request/Response——h3 2.0 不是前朝代码，而是 unjs 当前主线；RC 只是发布节奏问题。h3 2.0 已有 createRouter、onRequest/onResponse/onError 钩子、校验 handler，中间件能力具备（生态中间件少，需自建——本框架本就要自建中间件体系，差距被场景消掉）。
+  3. **轻量程度打平**：h3 与 Hono 核心库都极轻（h3 是事件核心，Hono 是零依赖框架内核），不是差异点；差异在生态位——Hono 自带完整框架能力，h3 的完整形态是 nitro。
+  4. **取消语义 Node 下打平**：Request.signal 在客户端断开时自动 abort 是 Web 平台语义，Node 下两个框架都需要适配层监听连接事件（本方案用 `event.runtime?.node?.res` 的 close）。
+- 保留的观察：如果将来服务端膨胀到需要完整框架（SSR/复杂中间件/多运行时部署），升级路径是 nitro（h3 生态的完整形态），而不是换 Hono。
 
 ### D5：上下文通过 `this` 注入（TS this 参数）
 
@@ -146,9 +152,17 @@ h3 handler（dev/prod 共用，约 120 行）
 
 - `configureServer` 中挂 handler；`import.meta.glob` 的 lazy 加载 + Vite 模块图负责 TS 转换、模块缓存与 HMR 失效（**这是本方案唯一会咬人的细节，不能裸动态 import**）。
 
-### 4.3 prod 接线
+### 4.3 prod 接线（已落实，见 server/index.ts）
 
-- 用户自己的 h3 服务器注册同一 handler；`.server.ts` 由 Rollup 通过 `import.meta.glob` 静态分析打包进服务器 bundle（T4，已定），无需额外入口、无需运行时文件系统扫描。
+- **服务器入口 `server/index.ts`**（同一 h3 app、单端口组合三件事）：
+  1. RPC：`createRpcHandler({ modules: fromGlob(import.meta.glob("/src/**/*.server.ts")) })`——Rollup 构建时静态打包全部 .server.ts（各成独立 chunk），请求时 lazy 加载
+  2. 静态资源：h3 `serveStatic` + fs 后端（getMeta 用 fs.stat 提供 type/size/mtime/弱 etag，getContents 读文件）——etag/304/Last-Modified 已验证
+  3. SPA fallback：静态未命中 → 读 dist/index.html 返回（history 路由）
+- **构建**：`pnpm build:all` = 客户端 `vp build`（dist/）+ 服务器 `vp build --ssr server/index.ts --outDir dist-server`（dist-server/）
+- **运行**：`node dist-server/index.js`（PORT 环境变量可配，默认 3000）
+- **监听**：listhen 的 `listen()`——注意必须传 `toNodeHandler(app)`（h3 对象的 handler 是事件形态，直接传 app 会挂起）
+- **静态服务不需要单独部署**：RPC 与静态资源在同一 app、同一端口；若将来静态资源要上 CDN/nginx，只需把 RPC 前缀保留在服务器、静态交 CDN，无需改代码
+- **etag 细节**：serveStatic 只在 getMeta 提供 etag 字段时才处理 If-None-Match（弱 etag：`W/"{size}-{mtimeMs}"`），否则只有 Last-Modified
 
 ### 4.4 请求协议（草案，待定项见 §6）
 
@@ -257,3 +271,4 @@ Body: stringify(args)   // 位置参数数组，与函数声明完全一致
 - "前置包裹"方案有一个 ESM 坑：transform 注入的代码拿不到导出列表（顶部 TDZ / 尾部仍需写导出名）；文件即函数约定直接绕过了这个问题。
 - "库的复杂 vs 自用简单"的本质：库要为所有部署形态做抽象（adapter、配置、fallback），应用内代码只需要一种形态，写死即可。
 - dev 下模块缓存/HMR 是唯一会咬人的实现细节，必须走 `ssrLoadModule`（Vite 模块图），不能裸 `import()`。
+- "框架选择"（h3 vs Hono）：选框架本质是选"服务端基座"，不是选"RPC 实现"——本方案只有 dev 接入与 handler 依赖框架，插件层与协议层与框架无关；"官方维护的适配状态流" > "框架功能完整度"，h3 2.0（nitro v3 背书）胜出，详见 D4。
