@@ -127,7 +127,9 @@ export default (function (this: RpcContext, name: string) {
 ### 4.1 模块划分
 
 ```
-Vite 插件（vite.config.ts 注册，约 80 行）
+Vite 插件 src/rpc/plugin.ts（vite.config.ts 注册，约 120 行）
+  ├─ config 钩子：客户端 outDir → {outDir}/client（打包根与服务器产物并列）；
+  │     SSR 构建（服务器，CLI --ssr + --outDir）跳过，避免双重拼装
   ├─ resolveId(source, importer, options)
   │     source 以 .server.ts 结尾 && !options.ssr → 返回虚拟 id
   ├─ load(id)
@@ -135,32 +137,40 @@ Vite 插件（vite.config.ts 注册，约 80 行）
   └─ configureServer(server)
         server.middlewares.use(rpcHandler)   // dev 接线
 
-h3 handler（dev/prod 共用，约 120 行）
-  ├─ 初始化：import.meta.glob("/src/**/*.server.ts") 构建路由表（T4，已定）
-  │     prod: Rollup 静态打包全部匹配文件，构建时已知全部路由
-  │     dev: lazy 加载，请求时 await 触发 Vite 按需转换，HMR 自动失效
-  ├─ POST /rpc/:path
-  │     查表 → const mod = await modules[path]() → const fn = mod.default
-  │     → await fn.call(context, ...args) → stringify 响应
-  ├─ 取消（T3，已定）：每请求一个 AbortController
-  │     event.node.req.on("close", () => controller.abort()) + 可配超时
-  │     context.signal = controller.signal（函数内 this.signal 读取）
-  └─ 错误边界：通用错误响应（生产不泄漏堆栈/消息）
+runtime src/rpc/server.ts（dev/prod 共用）
+  ├─ createRpcHandler：RPC 分发 handler（h3）
+  ├─ createRpcServer：生产服务器封装（RPC + 静态资源 + SPA fallback + listhen），
+  │     用户显式入口（server/index.ts）只写几行配置
+  └─ fromGlob / RpcError / RpcContext / isRpcError
+
+显式服务器入口 server/index.ts（用户项目，内容极少）
+  ├─ createRpcServer({ modules: fromGlob(import.meta.glob("/src/**/*.server.ts")) })
+  └─ 构建命令：vp build --ssr server/index.ts --outDir dist/server
 ```
 
 ### 4.2 dev 接线
 
 - `configureServer` 中挂 handler；`import.meta.glob` 的 lazy 加载 + Vite 模块图负责 TS 转换、模块缓存与 HMR 失效（**这是本方案唯一会咬人的细节，不能裸动态 import**）。
 
-### 4.3 prod 接线（已落实，见 server/index.ts）
+### 4.3 prod 接线（已落实，见 server/index.ts + src/rpc/server.ts 的 createRpcServer）
 
-- **服务器入口 `server/index.ts`**（同一 h3 app、单端口组合三件事）：
-  1. RPC：`createRpcHandler({ modules: fromGlob(import.meta.glob("/src/**/*.server.ts")) })`——Rollup 构建时静态打包全部 .server.ts（各成独立 chunk），请求时 lazy 加载
-  2. 静态资源：h3 `serveStatic` + fs 后端（getMeta 用 fs.stat 提供 type/size/mtime/弱 etag，getContents 读文件）——etag/304/Last-Modified 已验证
-  3. SPA fallback：静态未命中 → 读 dist/index.html 返回（history 路由）
-- **构建**：`pnpm build:all` = 客户端 `vp build`（dist/）+ 服务器 `vp build --ssr server/index.ts --outDir dist-server`（dist-server/）
-- **运行**：`node dist-server/index.js`（PORT 环境变量可配，默认 3000）
-- **监听**：listhen 的 `listen()`——注意必须传 `toNodeHandler(app)`（h3 对象的 handler 是事件形态，直接传 app 会挂起）
+- **显式服务器入口 `server/index.ts`**（用户项目文件，内容极少——内部逻辑全部封装在 `createRpcServer`）：
+
+  ```ts
+  await createRpcServer({
+    prefix: "rpc",
+    modules: fromGlob(import.meta.glob("/src/**/*.server.ts")),
+  });
+  ```
+
+- **createRpcServer 封装**（同一 h3 app、单端口组合四件事）：
+  1. RPC：`createRpcHandler`——Rollup 构建时静态打包全部 .server.ts（各成独立 chunk），请求时 lazy 加载
+  2. 静态资源：h3 `serveStatic` + fs 后端（getMeta 用 fs.stat 提供 type/size/mtime/弱 etag，getContents 读文件）——etag/304/Last-Modified 已验证；目录默认 `../client`（相对产物定位，不依赖 cwd）
+  3. SPA fallback：静态未命中 → 读 index.html 返回（history 路由）
+  4. 监听：listhen（PORT 环境变量可配，默认 3000）——必须传 `toNodeHandler(app)`（h3 对象的 handler 是事件形态，直接传 app 会挂起）
+- **构建**：`pnpm build` = `tsc && vp build && vp build --ssr server/index.ts --outDir dist/server`（一步产出 dist/client + dist/server，无嵌套构建）
+- **运行**：`node dist/server/index.js`（PORT 环境变量可配，默认 3000）
+- **插件不参与服务器构建编排**（设计结论：嵌套构建需要防递归等机制，为省一个命令引入不稳定不值）：服务器构建由用户脚本显式执行，入口文件的 glob pattern 与客户端插件选项（scanRoot）各自显式、互相独立，改 scanRoot 需同步两处
 - **静态服务不需要单独部署**：RPC 与静态资源在同一 app、同一端口；若将来静态资源要上 CDN/nginx，只需把 RPC 前缀保留在服务器、静态交 CDN，无需改代码
 - **etag 细节**：serveStatic 只在 getMeta 提供 etag 字段时才处理 If-None-Match（弱 etag：`W/"{size}-{mtimeMs}"`），否则只有 Last-Modified
 

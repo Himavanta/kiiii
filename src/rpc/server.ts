@@ -1,6 +1,8 @@
-import { defineEventHandler } from "h3";
-import { HTTPError } from "h3/node";
+import { defineEventHandler, H3, serveStatic } from "h3";
+import { HTTPError, toNodeHandler } from "h3/node";
 import type { H3Event } from "h3";
+import { listen } from "listhen";
+import { readFile, stat } from "node:fs/promises";
 import { parse, stringify } from "devalue";
 
 /**
@@ -178,4 +180,132 @@ export function createRpcHandler(options: RpcHandlerOptions) {
       throw new HTTPError("Internal Server Error", { status: 500 });
     }
   });
+}
+
+// ==================== 服务器入口封装（createRpcServer） ====================
+// 用户项目里的显式服务器入口（如 server/index.ts）只需几行：
+//
+// ```ts
+// import { createRpcServer, fromGlob } from "fly-rpc/server";
+// await createRpcServer({
+//   prefix: "rpc",
+//   modules: fromGlob(import.meta.glob("/src/**/*.server.ts")),
+// });
+// ```
+
+/** 极简 MIME 表（覆盖 Vite 产物常见类型） */
+const MIME: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+  ".ico": "image/x-icon",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
+  ".json": "application/json",
+  ".map": "application/json",
+  ".txt": "text/plain; charset=utf-8",
+  ".webmanifest": "application/manifest+json",
+};
+
+function mimeFromExt(file: string): string {
+  const dot = file.lastIndexOf(".");
+  return dot >= 0
+    ? (MIME[file.slice(dot)] ?? "application/octet-stream")
+    : "application/octet-stream";
+}
+
+/**
+ * serveStatic 的 fs 后端。staticBase 为静态资源目录的 file: URL。
+ * id 是不透明路径（保持编码，new URL 相对解析不二次编码），安全要求见 h3 文档。
+ */
+function staticBackend(staticBase: URL) {
+  // id 以 "/" 开头（如 /assets/index.js），去掉前导斜杠后相对 staticBase 解析，
+  // 否则 new URL 会把它当根绝对路径（file:///assets/...）导致 stat 失败
+  const resolve = (id: string) => new URL(id.replace(/^\//, ""), staticBase);
+  return {
+    fallthrough: true,
+    getMeta: async (id: string) => {
+      try {
+        const info = await stat(resolve(id));
+        if (!info.isFile()) return undefined;
+        return {
+          type: mimeFromExt(id),
+          size: info.size,
+          mtime: info.mtime,
+          // 弱 etag（size + mtime 派生），serveStatic 据此处理 If-None-Match → 304
+          etag: `W/"${info.size}-${info.mtimeMs}"`,
+        };
+      } catch {
+        return undefined;
+      }
+    },
+    getContents: async (id: string) => {
+      try {
+        return await readFile(resolve(id));
+      } catch {
+        return null;
+      }
+    },
+  };
+}
+
+export interface RpcServerOptions {
+  /** 路由 → 模块加载器（生产用法：fromGlob(import.meta.glob("/src/**\/*.server.ts"))） */
+  modules: RpcModuleMap;
+  /** URL 前缀，默认 "rpc"（端点形如 /rpc/actions/greet） */
+  prefix?: string;
+  /**
+   * 静态资源目录（file: URL，相对产物入口文件定位）。
+   * 入口位于产物根（如 dist/server/index.js），`new URL("../client/", import.meta.url)` 即 dist/client。
+   * 不用默认值：runtime 可能被拆到 assets/ 子目录（.server.ts 共享），相对定位不可靠，由入口显式给出最稳
+   */
+  staticDir: URL;
+  /** 监听端口，默认 process.env.PORT ?? 3000 */
+  port?: number;
+  /** 开发模式：意外错误泄漏 message 便于调试，默认 false */
+  isDev?: boolean;
+}
+
+/**
+ * 创建并启动生产服务器（RPC + 静态资源 + SPA fallback + listhen 监听，单端口）。
+ *
+ * 用户项目里的显式入口（如 server/index.ts）调用本函数，全部内部逻辑（h3 app 组装、
+ * 静态服务、history 路由 fallback、监听）由插件封装，入口只写配置。
+ *
+ * 构建命令（与客户端构建并列）：`vp build --ssr server/index.ts --outDir dist/server`
+ */
+export async function createRpcServer(options: RpcServerOptions) {
+  const prefix = options.prefix ?? "rpc";
+  const isDev = options.isDev ?? false;
+  const port = options.port ?? Number(process.env.PORT ?? 3000);
+  const staticBase = options.staticDir;
+
+  // 1. RPC：.server.ts 构建时全部打包（import.meta.glob），请求时 lazy 加载分发
+  const app = new H3();
+  app.use(`/${prefix}/**`, createRpcHandler({ modules: options.modules, prefix, isDev }));
+
+  // 2. 静态资源（{打包根}/client）
+  app.use(
+    "/**",
+    defineEventHandler((event) => serveStatic(event, staticBackend(staticBase))),
+  );
+
+  // 3. SPA fallback：history 路由的未命中路径 → index.html
+  app.use(
+    "/**",
+    defineEventHandler(async (event) => {
+      event.res.headers.set("content-type", "text/html; charset=utf-8");
+      return await readFile(new URL("index.html", staticBase), "utf-8");
+    }),
+  );
+
+  await listen(toNodeHandler(app), { port, hostname: "0.0.0.0" });
+  return app;
 }

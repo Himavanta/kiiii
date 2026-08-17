@@ -5,10 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vp dev",
-    "build": "tsc && vp build",
-    "build:server": "vp build --ssr server/index.ts --outDir dist-server",
-    "build:all": "pnpm build && pnpm build:server",
-    "start": "node dist-server/index.js",
+    "build": "tsc && vp build && vp build --ssr server/index.ts --outDir dist/server",
+    "start": "node dist/server/index.js",
     "preview": "vp preview",
     "prepare": "vp config"
   },

@@ -23,22 +23,34 @@ export interface RpcPluginOptions {
 /**
  * fly-rpc Vite 插件。
  *
- * - 客户端构建：resolveId 拦截 *.server.ts 导入 → 虚拟 stub 模块（load 生成 fetch 调用）
- * - 服务端原文件保持不动：SSR 解析（options.ssr）不拦截，dev 由 ssrLoadModule 加载
- * - dev 模式：把 h3 RPC handler 挂到 Vite 中间件；每次请求扫描 .server.ts 并
- *   ssrLoadModule（Vite 模块图负责缓存与 HMR 失效）
+ * - 客户端构建：resolveId 拦截 *.server.ts 导入 → 虚拟 stub 模块（load 生成 fetch 调用）；
+ *   服务端原文件保持不动（SSR 解析不拦截，dev 由 ssrLoadModule 加载）
+ * - dev 模式：h3 RPC handler 挂到 Vite 中间件，每次请求扫描 + ssrLoadModule（HMR 失效）
+ * - 构建模式：config 钩子把客户端 outDir 重定向到 {outDir}/client；服务器不参与构建编排——
+ *   入口由用户在项目里显式编写（见 createRpcServer），单独构建：
+ *   `vp build --ssr server/index.ts --outDir dist/server`
  */
 export function rpc(options: RpcPluginOptions = {}): Plugin {
   const prefix = options.prefix ?? "rpc";
   const timeout = options.timeout ?? 30_000;
+  const scanRootOption = options.scanRoot ?? "src";
   let scanRoot = "";
 
   return {
     name: "fly-rpc",
     enforce: "pre",
 
-    configResolved(config: ResolvedConfig) {
-      scanRoot = join(config.root, options.scanRoot ?? "src");
+    config(userConfig) {
+      // 服务器构建（--ssr，CLI 显式 --outDir dist/server）不重定向——
+      // CLI 的 outDir 已 merge 进 userConfig，再拼 client 会双重拼装（dist/server/client）
+      if (userConfig.build?.ssr) return;
+      // 客户端产物 → {outDir}/client（原始 outDir 保留为打包根，服务器产物并列）
+      const outDir = (userConfig.build?.outDir as string | undefined) ?? "dist";
+      return { build: { outDir: join(outDir, "client") } };
+    },
+
+    configResolved(resolved: ResolvedConfig) {
+      scanRoot = join(resolved.root, scanRootOption);
     },
 
     async resolveId(source, importer, resolveOptions) {
@@ -147,6 +159,7 @@ function generateStub(route: string, prefix: string, timeout: number): string {
   const safePrefix = JSON.stringify(prefix);
   return `
 import { rpcCall } from "/src/rpc/client.ts";
+
 
 // 由 fly-rpc 生成的客户端 stub：运行时替换服务端函数为 fetch 调用
 // 类型来自原文件（编辑器解析磁盘上的 .server.ts），行为与签名一致
