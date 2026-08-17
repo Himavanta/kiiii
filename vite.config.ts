@@ -1,8 +1,7 @@
 import { defineConfig } from "vite-plus";
-import rpc from "@thednp/rpc";
 
 export default defineConfig({
-  plugins: [rpc()],
+  plugins: [],
   staged: {
     "*": "vp check --fix",
   },
