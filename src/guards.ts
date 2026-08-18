@@ -1,4 +1,4 @@
-// 命名式类型守卫：带类型谓词，让 TS 自动收窄（参考 kiaao/src/core/type-guards.ts 风格）
+// 命名式类型守卫：带类型谓词，让 TS 自动收窄
 
 export const isArray = Array.isArray;
 

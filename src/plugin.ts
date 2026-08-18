@@ -9,11 +9,7 @@ import type { KiiiiModuleMap } from "./server.ts";
 import { routeHash } from "./hash.ts";
 import { isArray, isEmpty, isNil } from "./guards.ts";
 
-/**
- * Vite 虚拟模块约定：虚拟 id 必须以 \0 开头——
- * \0 不是合法文件名字符，保证虚拟 id 不可能与真实文件路径冲突，
- * 其他插件据此（id.startsWith('\0')）识别并跳过虚拟模块。
- */
+/** Vite 约定：虚拟 id 以 \0 开头（非合法文件名字符），与真实文件路径必然不冲突 */
 const virtual = (id: string): string => `\0${id}`;
 
 /** 服务器入口虚拟模块（公开名 → 内部 \0 id） */
@@ -28,8 +24,7 @@ const VIRTUAL_PREFIX = virtual("kiiii:");
 export interface KiiiiOptions {
   /**
    * glob pattern（相对项目 root）或 pattern 数组（多重匹配，目录/后缀完全放开）。
-   * 必填——决定哪些文件是服务器模块：客户端 import 命中 pattern 的文件会被替换为
-   * 远程调用，注意勿包含普通模块
+   * 必填——命中 pattern 的文件是服务器模块：客户端 import 它们会被替换为远程调用
    */
   pattern: string | string[];
   /** URL 前缀，默认 "kiiii"（端点形如 /kiiii/{hash}） */
@@ -44,16 +39,13 @@ export interface KiiiiOptions {
 }
 
 /**
- * kiiii Vite 插件。
+ * kiiii Vite 插件：把 .server.ts 文件变成客户端可调用的远程函数。
  *
- * - pattern 是唯一事实来源（不做后缀/目录推导）：route = routeHash(相对 root 的完整路径)，
- *   三个消费端各自使用同一 pattern 匹配与同一 route 算法：
- *   - dev：ssrLoadModule(模块表虚拟模块)——import.meta.glob 在 dev 下由 Vite 转换，
- *     无需目录扫描；每次请求 invalidate 后重载（新增模块文件即用）
- *   - 客户端：resolveId 用 createFilter(pattern) 精确匹配 → 虚拟 stub（fetch 调用）
- *   - 生产：SSR 构建以虚拟入口（kiiii:server）为 input，入口 import 模块表虚拟模块，
- *     glob 构建期展开为 lazy chunks
- * - 无服务器入口文件（server/index.ts 不需要），入口代码由插件生成（createKiiiiServer 封装） */
+ * pattern 是唯一事实来源：route = routeHash(相对 root 的完整路径)，三个消费端共用同一 pattern 与算法——
+ * dev（ssrLoadModule + 每请求重载模块表）、客户端（createFilter 匹配 → 虚拟 stub）、
+ * 生产（SSR 构建以虚拟入口 kiiii:server 为 input，glob 展开为 lazy chunks）。
+ * 服务器入口代码由插件生成（createKiiiiServer 封装），用户项目零服务器代码。
+ */
 export function kiiii(options?: KiiiiOptions): Plugin {
   const pattern = options?.pattern;
   if (isNil(pattern) || (isArray(pattern) && isEmpty(pattern))) {
@@ -74,11 +66,7 @@ export function kiiii(options?: KiiiiOptions): Plugin {
       isServerModule = createFilter(pattern);
     },
 
-    /**
-     * 构建时声明 SSR 构建（入口 = 虚拟模块 kiiii:server，经 rolldownOptions.input 指定——
-     * build.ssr 为 true 而非字符串，字符串会被当作文件系统路径 resolve）。
-     * Vite 标准流程据此注入完整的服务器环境（node 解析、依赖外部化）。dev 不受影响。
-     */
+    /** 构建时声明 SSR 构建：入口为虚拟模块 kiiii:server（build.ssr 开启 + rolldownOptions.input 指定） */
     config(_userConfig, env) {
       if (env.command !== "build") return;
       return {
@@ -87,8 +75,8 @@ export function kiiii(options?: KiiiiOptions): Plugin {
           copyPublicDir: false, // public 属于客户端
           rolldownOptions: { input: { index: SERVER_MODULE } },
         },
-        // 依赖打包策略：bundleDeps=true 全量打包（自包含）；false 时不传 noExternal（保持默认 external）
-        // 依赖打包策略：bundleDeps=true 全量打包（自包含），但 vite 系（构建期工具）必须 external
+        // 依赖打包策略：bundleDeps=true 全量打包（自包含部署）；false 时不传 noExternal（保持默认 external）。
+        // vite 系构建期工具始终 external
         ...(bundleDeps
           ? {
               ssr: {
@@ -100,15 +88,12 @@ export function kiiii(options?: KiiiiOptions): Plugin {
       };
     },
 
-    /**
-     * 接管构建（vite-plus/vite builder 的 buildApp 钩子）：一个 vp build 完成两个环境。
-     * 先服务器（SSR → 打包根），后客户端（→ {打包根}/clients）。所有打包参数都在插件内确定。
-     */
+    /** 一个 vp build 完成两个环境：先服务器（SSR → 打包根），后客户端（→ {打包根}/clients） */
     async buildApp(builder) {
       const { config } = builder;
       // 打包根（build.outDir 已 resolve 为绝对路径）：服务器产物在其根，客户端在其 {outDir}/clients
       const outDir = config.build.outDir;
-      // 客户端环境：清掉继承的服务器入口 input、重定向 outDir、恢复 public 拷贝
+      // 客户端环境：清除继承的服务器入口 input、重定向 outDir、恢复 public 拷贝
       const { input: _serverInput, ...clientRolldown } =
         config.environments.client.build.rolldownOptions ?? {};
       config.environments["client"] = {
@@ -133,14 +118,14 @@ export function kiiii(options?: KiiiiOptions): Plugin {
     },
 
     async resolveId(source, importer, resolveOptions) {
-      // 虚拟模块（服务器入口 + 模块表）：SSR 构建与 dev 的 ssrLoadModule 都要解析
+      // 虚拟模块（服务器入口 + 模块表）
       if (source === SERVER_MODULE) return SERVER_ID;
       if (source === MODULES_MODULE) return MODULES_ID;
 
       // SSR 解析不拦截（服务端要加载原文件）
       if (resolveOptions?.ssr || isNil(importer)) return null;
 
-      // 解析为绝对路径；pattern 精确匹配（相对 root 的路径），命中则转 stub
+      // pattern 精确匹配（相对 root 的路径），命中则转 stub
       const resolved = await this.resolve(source, importer, { skipSelf: true });
       if (!resolved) return null;
       const route = toRoute(resolved.id, root, isServerModule!);
@@ -162,9 +147,7 @@ export function kiiii(options?: KiiiiOptions): Plugin {
     },
 
     configureServer(server) {
-      // dev：h3 handler 挂到 Vite 中间件。
-      // 注意不能用 connect 的 use(path) 形式——它会剥掉匹配前缀改写 req.url，
-      // 导致 h3 看到的 event.path 丢失 /kiiii 前缀；这里手动判断前缀，未命中走 next
+      // dev：h3 handler 挂到 Vite 中间件。手动匹配前缀（connect 的 use(path) 会改写 req.url 破坏路由）
       server.middlewares.use((req, res, next) => {
         const url = req.url ?? "";
         if (url !== `/${prefix}` && !url.startsWith(`/${prefix}/`)) {
@@ -177,7 +160,7 @@ export function kiiii(options?: KiiiiOptions): Plugin {
   };
 }
 
-/** dev 请求处理：重载模块表（invalidate 使 glob 重新匹配，新增文件即用）+ ssrLoadModule */
+/** dev 请求处理：重载模块表（新增文件即用）+ ssrLoadModule + h3 分发 */
 async function handleDevRequest(
   server: ViteDevServer,
   prefix: string,
@@ -216,7 +199,7 @@ function toRoute(id: string, root: string, isServerModule: (id: string) => boole
  */
 const lit = (value: unknown): string => JSON.stringify(value);
 
-/** 生成服务器入口（虚拟模块）：最少逻辑——createKiiiiServer + 模块表，prefix 由插件选项注入 */
+/** 生成服务器入口（虚拟模块）：createKiiiiServer + 模块表，prefix 由插件选项注入 */
 function generateServerEntry(prefix: string): string {
   return `import { createKiiiiServer } from "kiiii/server";
 import modules from "kiiii:modules";
@@ -226,10 +209,7 @@ await createKiiiiServer({ prefix: ${lit(prefix)}, modules });
 `;
 }
 
-/**
- * 生成模块表（虚拟模块）：只保留宏必需的 import.meta.glob 调用（pattern 必须是字面量，
- * 且虚拟模块按 JS 解析不能带泛型），组装逻辑封装在 buildModuleMap（src/kiiii/modules.ts）。
- */
+/** 生成模块表（虚拟模块）：import.meta.glob 展开 + buildModuleMap 组装 */
 function generateModules(pattern: string | string[]): string {
   return `import { buildModuleMap } from "kiiii/server";
 const globs = import.meta.glob(${lit(pattern)});

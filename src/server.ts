@@ -24,13 +24,13 @@ export interface KiiiiContext {
   event: H3Event;
 }
 
-/** 路由 → 模块加载器。路由 = 相对项目 root 的路径（去 pattern 静态前缀与文件后缀），如 "api/greet" */
+/** 路由（routeHash）→ 模块加载器 */
 export type KiiiiModuleMap = Record<string, () => Promise<{ default: unknown }>>;
 
 export interface KiiiiHandlerOptions {
   /** 路由 → 模块加载器（dev 由插件注入，prod 由模块表虚拟模块提供） */
   modules: KiiiiModuleMap;
-  /** URL 前缀，默认 "kiiii"（端点形如 /kiiii/actions/greet） */
+  /** URL 前缀，默认 "kiiii"（端点形如 /kiiii/{hash}） */
   prefix?: string;
   /** 开发模式：意外错误泄漏 message 便于调试；生产恒 500 通用错误 */
   isDev?: boolean;
@@ -56,7 +56,7 @@ export function createKiiiiHandler(options: KiiiiHandlerOptions) {
       throw new HTTPError("Method Not Allowed", { status: 405 });
     }
 
-    // 路由解析：/kiiii/actions/greet → route = "actions/greet"（h3 2.0：event.path 已弃用，用 url.pathname）
+    // 路由解析：/{prefix}/{route}，route = 前缀之后的部分
     const pathname = event.url.pathname;
     if (!pathname.startsWith(`/${prefix}/`)) {
       throw new HTTPError("Not Found", { status: 404 });
@@ -77,17 +77,15 @@ export function createKiiiiHandler(options: KiiiiHandlerOptions) {
       throw new HTTPError("Not Found", { status: 404 });
     }
 
-    // 取消链路：客户端断开 → abort → this.signal（函数内 throwIfAborted 提前退出）
-    // 注意：监听 res 的 close（连接在响应结束前关闭才触发），不能监听 req 的 close——
-    // IncomingMessage 的 close 在请求正常完成后也会触发，会把进行中的调用误中止
+    // 取消链路：客户端断开 → abort → this.signal（函数内 throwIfAborted 提前退出）。
+    // 监听 res 的 close（仅连接在响应结束前关闭时触发；req 的 close 在请求正常完成后也会触发）
     const controller = new AbortController();
     const res = event.runtime?.node?.res;
     if (res) {
       res.on("close", () => controller.abort());
     }
 
-    // 解析参数（devalue 编码的位置参数数组）
-    // readRawBody 在 h3 2.0 已弃用，直接用标准 Request 的 text()（无 body 时返回空串）
+    // 解析参数：devalue 编码的位置参数数组（无 body 时为空数组）
     const raw = await event.req.text();
     let args: unknown[] = [];
     if (raw) {
@@ -98,7 +96,7 @@ export function createKiiiiHandler(options: KiiiiHandlerOptions) {
         }
         args = parsed;
       } catch (error) {
-        // HTTPError.isError 跨上下文安全（按 constructor name 判断），与 isKiiiiError 同理
+        // parse 抛出的 HTTPError 原样透传，其余统一 Bad Request
         if (HTTPError.isError(error)) throw error;
         throw new HTTPError("Bad Request", { status: 400, cause: error });
       }
@@ -117,8 +115,7 @@ export function createKiiiiHandler(options: KiiiiHandlerOptions) {
       return stringify(result);
     } catch (error) {
       if (isKiiiiError(error)) {
-        // 业务错误：开发者显式声明的错误，message/code/data 是产品的一部分（生产也传）
-        // 200 是默认状态码，无需 setResponseStatus（该 API 在 h3 2.0 已弃用）
+        // 业务错误：开发者显式声明的错误，message/code/data 是产品的一部分（生产也传），走 200 + 信封
         return stringify({
           ok: false,
           name: "KiiiiError",
@@ -219,7 +216,7 @@ function staticBackend(staticBase: URL) {
 export interface KiiiiServerOptions {
   /** 路由 → 模块加载器（默认形态由插件虚拟模块提供） */
   modules: KiiiiModuleMap;
-  /** URL 前缀，默认 "kiiii"（端点形如 /kiiii/actions/greet） */
+  /** URL 前缀，默认 "kiiii"（端点形如 /kiiii/{hash}） */
   prefix?: string;
   /**
    * 静态资源目录。默认约定：{项目根}/dist/clients（服务器产物在打包根 dist，

@@ -1,9 +1,8 @@
 import { routeHash } from "./hash.ts";
 
 /**
- * 把 import.meta.glob 的展开结果组装为路由 → 加载器映射。
- * 由模块表虚拟模块在 dev（Vite 运行时转换）与生产（构建期展开）两端调用——
- * 逻辑单一来源：遍历、哈希、碰撞检测都在这里，生成代码只保留宏必需的 glob 调用。
+ * 把 import.meta.glob 的展开结果组装为路由 → 加载器映射，dev 与生产共用。
+ * 遍历、哈希、碰撞检测单一来源，生成代码只保留宏必需的 glob 调用。
  * 哈希碰撞（不同路径同哈希，理论上可忽略）在此报错，带完整路径。
  */
 export function buildModuleMap(
