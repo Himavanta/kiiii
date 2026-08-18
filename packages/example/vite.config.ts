@@ -2,7 +2,7 @@ import { defineConfig } from "vite-plus";
 import { kiiii } from "kiiii";
 
 export default defineConfig({
-  plugins: [kiiii({ pattern: "/src/**/*.server.ts" })],
+  plugins: [kiiii({ pattern: "/src/**/*.server.ts", timeout: 5_000 })], // timeout: 5s 演示全局超时
   staged: {
     "*": "vp check --fix",
   },
