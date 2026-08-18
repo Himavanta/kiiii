@@ -12,13 +12,13 @@ import { isFunction } from "./guards.ts";
 // 以及错误协议（公共概念，主来源 kiiii/shared）
 export { buildModuleMap } from "./modules.ts";
 export { routeHash } from "./hash.ts";
-import { isRpcError, RpcError } from "./shared.ts";
-export { isRpcError, RpcError };
+import { isKiiiiError, KiiiiError } from "./shared.ts";
+export { isKiiiiError, KiiiiError };
 
 /**
  * 服务端函数上下文：由分发器通过 `fn.call(context, ...args)` 注入，函数内用 `this` 读取。
  */
-export interface RpcContext {
+export interface KiiiiContext {
   /** 请求取消信号：连接断开 / 超时 / 客户端取消时触发，函数内可 throwIfAborted 提前退出 */
   signal: AbortSignal;
   /** h3 原始事件：可访问 request / headers / cookies 等 */
@@ -26,29 +26,29 @@ export interface RpcContext {
 }
 
 /** 路由 → 模块加载器。路由 = 相对项目 root 的路径（去 pattern 静态前缀与文件后缀），如 "api/greet" */
-export type RpcModuleMap = Record<string, () => Promise<{ default: unknown }>>;
+export type KiiiiModuleMap = Record<string, () => Promise<{ default: unknown }>>;
 
-export interface RpcHandlerOptions {
+export interface KiiiiHandlerOptions {
   /** 路由 → 模块加载器（dev 由插件注入，prod 由模块表虚拟模块提供） */
-  modules: RpcModuleMap;
-  /** URL 前缀，默认 "rpc"（端点形如 /rpc/actions/greet） */
+  modules: KiiiiModuleMap;
+  /** URL 前缀，默认 "kiiii"（端点形如 /kiiii/actions/greet） */
   prefix?: string;
   /** 开发模式：意外错误泄漏 message 便于调试；生产恒 500 通用错误 */
   isDev?: boolean;
 }
 
 /**
- * 创建 RPC 分发 handler（h3），dev / prod 共用同一份协议。
+ * 创建远程调用分发 handler（h3），dev / prod 共用同一份协议。
  *
- * 协议（见 agent-docs/服务端函数RPC方案.md §4.4）：
+ * 协议（见 agent-docs/服务端函数方案.md §4.4）：
  * - POST /{prefix}/{route}，body 为 devalue 编码的位置参数数组
  * - 成功：200 + stringify(result)（纯数据，不包信封）
- * - 业务错误（RpcError）：200 + stringify({ ok: false, name, message, code?, data? })
+ * - 业务错误（KiiiiError）：200 + stringify({ ok: false, name, message, code?, data? })
  * - 传输/协议错误：非 2xx 通用错误体
  */
-export function createRpcHandler(options: RpcHandlerOptions) {
+export function createKiiiiHandler(options: KiiiiHandlerOptions) {
   const { modules } = options;
-  const prefix = options.prefix ?? "rpc";
+  const prefix = options.prefix ?? "kiiii";
   const isDev = options.isDev ?? false;
 
   return defineEventHandler(async (event) => {
@@ -57,7 +57,7 @@ export function createRpcHandler(options: RpcHandlerOptions) {
       throw new HTTPError("Method Not Allowed", { status: 405 });
     }
 
-    // 路由解析：/rpc/actions/greet → route = "actions/greet"（h3 2.0：event.path 已弃用，用 url.pathname）
+    // 路由解析：/kiiii/actions/greet → route = "actions/greet"（h3 2.0：event.path 已弃用，用 url.pathname）
     const pathname = event.url.pathname;
     if (!pathname.startsWith(`/${prefix}/`)) {
       throw new HTTPError("Not Found", { status: 404 });
@@ -99,7 +99,7 @@ export function createRpcHandler(options: RpcHandlerOptions) {
         }
         args = parsed;
       } catch (error) {
-        // HTTPError.isError 跨上下文安全（按 constructor name 判断），与 isRpcError 同理
+        // HTTPError.isError 跨上下文安全（按 constructor name 判断），与 isKiiiiError 同理
         if (HTTPError.isError(error)) throw error;
         throw new HTTPError("Bad Request", { status: 400, cause: error });
       }
@@ -112,17 +112,17 @@ export function createRpcHandler(options: RpcHandlerOptions) {
     }
 
     // 分发：context 经 this 注入，参数按位置展开（与函数声明完全一致）
-    const context: RpcContext = { signal: controller.signal, event };
+    const context: KiiiiContext = { signal: controller.signal, event };
     try {
       const result = await fn.call(context, ...args);
       return stringify(result);
     } catch (error) {
-      if (isRpcError(error)) {
+      if (isKiiiiError(error)) {
         // 业务错误：开发者显式声明的错误，message/code/data 是产品的一部分（生产也传）
         // 200 是默认状态码，无需 setResponseStatus（该 API 在 h3 2.0 已弃用）
         return stringify({
           ok: false,
-          name: "RpcError",
+          name: "KiiiiError",
           message: error.message,
           code: error.code,
           data: error.data,
@@ -142,14 +142,14 @@ export function createRpcHandler(options: RpcHandlerOptions) {
   });
 }
 
-// ==================== 服务器入口封装（createRpcServer） ====================
+// ==================== 服务器入口封装（createKiiiiServer） ====================
 // 默认形态：插件虚拟入口（kiiii:server）调用本函数，用户项目零服务器代码。
 // 逃生舱（高级用法）：自写服务器入口手动组装：
 //
 // ```ts
-// import { createRpcServer } from "kiiii";
-// await createRpcServer({
-//   prefix: "rpc",
+// import { createKiiiiServer } from "kiiii";
+// await createKiiiiServer({
+//   prefix: "kiiii",
 //   modules: { "api/greet": () => import("./src/api/greet.server.ts") },
 // });
 // ```
@@ -217,10 +217,10 @@ function staticBackend(staticBase: URL) {
   };
 }
 
-export interface RpcServerOptions {
+export interface KiiiiServerOptions {
   /** 路由 → 模块加载器（默认形态由插件虚拟模块提供） */
-  modules: RpcModuleMap;
-  /** URL 前缀，默认 "rpc"（端点形如 /rpc/actions/greet） */
+  modules: KiiiiModuleMap;
+  /** URL 前缀，默认 "kiiii"（端点形如 /kiiii/actions/greet） */
   prefix?: string;
   /**
    * 静态资源目录。默认约定：{项目根}/dist/clients（服务器产物在打包根 dist，
@@ -235,15 +235,15 @@ export interface RpcServerOptions {
 }
 
 /**
- * 创建并启动生产服务器（RPC + 静态资源 + SPA fallback + listhen 监听，单端口）。
+ * 创建并启动生产服务器（远程调用 + 静态资源 + SPA fallback + listhen 监听，单端口）。
  *
  * 默认形态：插件虚拟入口（kiiii:server）调用本函数，全部内部逻辑（h3 app 组装、
  * 静态服务、history 路由 fallback、监听）由插件封装，用户项目零服务器代码。
  *
  * 构建：单个 vp build（插件 buildApp 钩子接管，虚拟入口为 SSR 构建 input）
  */
-export async function createRpcServer(options: RpcServerOptions): Promise<H3> {
-  const prefix = options.prefix ?? "rpc";
+export async function createKiiiiServer(options: KiiiiServerOptions): Promise<H3> {
+  const prefix = options.prefix ?? "kiiii";
   const isDev = options.isDev ?? false;
   const port = options.port ?? Number(process.env.PORT ?? 3000);
   // 静态资源基址（file: URL）：默认约定 {项目根}/dist/clients；自定义时接受绝对路径或 URL。
@@ -252,9 +252,9 @@ export async function createRpcServer(options: RpcServerOptions): Promise<H3> {
   const staticRaw = staticDir instanceof URL ? staticDir.href : pathToFileURL(staticDir).href;
   const staticBase = new URL(staticRaw.endsWith("/") ? staticRaw : `${staticRaw}/`);
 
-  // 1. RPC：.server.ts 构建时全部打包（import.meta.glob），请求时 lazy 加载分发
+  // 1. 远程调用：.server.ts 构建时全部打包（import.meta.glob），请求时 lazy 加载分发
   const app = new H3();
-  app.use(`/${prefix}/**`, createRpcHandler({ modules: options.modules, prefix, isDev }));
+  app.use(`/${prefix}/**`, createKiiiiHandler({ modules: options.modules, prefix, isDev }));
 
   // 2. 静态资源（{打包根}/client）
   app.use(

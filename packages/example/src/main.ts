@@ -6,8 +6,8 @@ import { setupCounter } from "./counter.ts";
 
 import greet from "./api/greet.server.ts";
 
-// RPC 调用示例：与普通函数调用无区别（类型来自原文件签名）
-// 取消：const p = greet("World"); rpcCancel(p, "用户取消了");
+// 远程调用示例：与普通函数调用无区别（类型来自原文件签名）
+// 取消：const p = greet("World"); cancel(p, "用户取消了");
 const result = await greet("World");
 
 document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
@@ -20,7 +20,7 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
   <div>
     <h1>Get started</h1>
     <p>Edit <code>src/main.ts</code> and save to test <code>HMR</code></p>
-    <p class="rpc-result">RPC 结果：<code>${result}</code></p>
+    <p class="call-result">调用结果：<code>${result}</code></p>
   </div>
   <button id="counter" type="button" class="counter"></button>
 </section>

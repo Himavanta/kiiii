@@ -4,8 +4,8 @@ import { join, relative, isAbsolute } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { H3 } from "h3";
 import { toNodeHandler } from "h3/node";
-import { createRpcHandler } from "./server.ts";
-import type { RpcModuleMap } from "./server.ts";
+import { createKiiiiHandler } from "./server.ts";
+import type { KiiiiModuleMap } from "./server.ts";
 import { routeHash } from "./hash.ts";
 import { isArray, isEmpty, isNil } from "./guards.ts";
 
@@ -25,14 +25,14 @@ const MODULES_ID = virtual(MODULES_MODULE);
 /** 客户端 stub 虚拟模块前缀（\0kiiii:{route}） */
 const VIRTUAL_PREFIX = virtual("kiiii:");
 
-export interface RpcPluginOptions {
+export interface KiiiiOptions {
   /**
    * glob pattern（相对项目 root）或 pattern 数组（多重匹配，目录/后缀完全放开）。
    * 必填——决定哪些文件是服务器模块：客户端 import 命中 pattern 的文件会被替换为
-   * RPC 调用，注意勿包含普通模块
+   * 远程调用，注意勿包含普通模块
    */
   pattern: string | string[];
-  /** URL 前缀，默认 "rpc"（端点形如 /rpc/{hash}） */
+  /** URL 前缀，默认 "kiiii"（端点形如 /kiiii/{hash}） */
   prefix?: string;
   /** 客户端调用超时（毫秒），0 关闭，默认 30_000 */
   timeout?: number;
@@ -53,13 +53,13 @@ export interface RpcPluginOptions {
  *   - 客户端：resolveId 用 createFilter(pattern) 精确匹配 → 虚拟 stub（fetch 调用）
  *   - 生产：SSR 构建以虚拟入口（kiiii:server）为 input，入口 import 模块表虚拟模块，
  *     glob 构建期展开为 lazy chunks
- * - 无服务器入口文件（server/index.ts 不需要），入口代码由插件生成（createRpcServer 封装） */
-export function rpc(options?: RpcPluginOptions): Plugin {
+ * - 无服务器入口文件（server/index.ts 不需要），入口代码由插件生成（createKiiiiServer 封装） */
+export function kiiii(options?: KiiiiOptions): Plugin {
   const pattern = options?.pattern;
   if (isNil(pattern) || (isArray(pattern) && isEmpty(pattern))) {
     throw new Error('[kiiii] pattern 选项必填（如 "/src/**/*.server.ts"）');
   }
-  const prefix = options?.prefix ?? "rpc";
+  const prefix = options?.prefix ?? "kiiii";
   const timeout = options?.timeout ?? 30_000;
   const bundleDeps = options?.bundleDeps ?? true;
   let root = "";
@@ -164,21 +164,21 @@ export function rpc(options?: RpcPluginOptions): Plugin {
     configureServer(server) {
       // dev：h3 handler 挂到 Vite 中间件。
       // 注意不能用 connect 的 use(path) 形式——它会剥掉匹配前缀改写 req.url，
-      // 导致 h3 看到的 event.path 丢失 /rpc 前缀；这里手动判断前缀，未命中走 next
+      // 导致 h3 看到的 event.path 丢失 /kiiii 前缀；这里手动判断前缀，未命中走 next
       server.middlewares.use((req, res, next) => {
         const url = req.url ?? "";
         if (url !== `/${prefix}` && !url.startsWith(`/${prefix}/`)) {
           next();
           return;
         }
-        void handleDevRpc(server, prefix, req, res);
+        void handleDevRequest(server, prefix, req, res);
       });
     },
   };
 }
 
 /** dev 请求处理：重载模块表（invalidate 使 glob 重新匹配，新增文件即用）+ ssrLoadModule */
-async function handleDevRpc(
+async function handleDevRequest(
   server: ViteDevServer,
   prefix: string,
   req: IncomingMessage,
@@ -188,9 +188,9 @@ async function handleDevRpc(
     const cached = server.moduleGraph.getModuleById(MODULES_ID);
     if (cached) server.moduleGraph.invalidateModule(cached);
     const mod = await server.ssrLoadModule(MODULES_MODULE);
-    const modules = mod.default as RpcModuleMap;
+    const modules = mod.default as KiiiiModuleMap;
     const app = new H3();
-    app.use(createRpcHandler({ modules, prefix, isDev: true }));
+    app.use(createKiiiiHandler({ modules, prefix, isDev: true }));
     toNodeHandler(app)(req, res);
   } catch (error) {
     console.error("[kiiii] dev handler 错误:", error);
@@ -216,19 +216,19 @@ function toRoute(id: string, root: string, isServerModule: (id: string) => boole
  */
 const lit = (value: unknown): string => JSON.stringify(value);
 
-/** 生成服务器入口（虚拟模块）：最少逻辑——createRpcServer + 模块表，prefix 由插件选项注入 */
+/** 生成服务器入口（虚拟模块）：最少逻辑——createKiiiiServer + 模块表，prefix 由插件选项注入 */
 function generateServerEntry(prefix: string): string {
-  return `import { createRpcServer } from "kiiii/server";
+  return `import { createKiiiiServer } from "kiiii/server";
 import modules from "kiiii:modules";
 
-// 由 kiiii 生成的服务器入口（虚拟模块）：RPC + 静态资源 + SPA fallback + listhen
-await createRpcServer({ prefix: ${lit(prefix)}, modules });
+// 由 kiiii 生成的服务器入口（虚拟模块）：远程调用 + 静态资源 + SPA fallback + listhen
+await createKiiiiServer({ prefix: ${lit(prefix)}, modules });
 `;
 }
 
 /**
  * 生成模块表（虚拟模块）：只保留宏必需的 import.meta.glob 调用（pattern 必须是字面量，
- * 且虚拟模块按 JS 解析不能带泛型），组装逻辑封装在 buildModuleMap（src/rpc/modules.ts）。
+ * 且虚拟模块按 JS 解析不能带泛型），组装逻辑封装在 buildModuleMap（src/kiiii/modules.ts）。
  */
 function generateModules(pattern: string | string[]): string {
   return `import { buildModuleMap } from "kiiii/server";
@@ -240,10 +240,10 @@ export default buildModuleMap(globs);
 /** 生成客户端 stub：替换服务器模块为 fetch 调用（所有插值经 lit 转义） */
 function generateStub(route: string, prefix: string, timeout: number): string {
   return `
-import { rpcCall } from "kiiii/client";
+import { invoke } from "kiiii/client";
 
 // 由 kiiii 生成的客户端 stub：运行时替换服务端函数为 fetch 调用
 // 类型来自原文件（编辑器解析磁盘上的服务器模块文件），行为与签名一致
-export default (...args) => rpcCall(${lit(prefix)}, ${lit(route)}, args, ${timeout});
+export default (...args) => invoke(${lit(prefix)}, ${lit(route)}, args, ${timeout});
 `;
 }

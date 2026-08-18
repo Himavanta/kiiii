@@ -1,8 +1,8 @@
 import { defineConfig } from "vite-plus";
-import { rpc } from "kiiii";
+import { kiiii } from "kiiii";
 
 export default defineConfig({
-  plugins: [rpc({ pattern: "/src/**/*.server.ts" })],
+  plugins: [kiiii({ pattern: "/src/**/*.server.ts" })],
   staged: {
     "*": "vp check --fix",
   },
