@@ -1,4 +1,5 @@
-import { KiiiiError, type KiiiiContext } from "kiiii/server";
+import { KiiiiError } from "kiiii/error";
+import type { KiiiiContext } from "kiiii/server";
 
 /**
  * 示例服务端函数：客户端 import 本文件时被替换为 fetch stub（见 kiiii 包），

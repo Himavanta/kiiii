@@ -1,4 +1,8 @@
-import { isError } from "./guards.ts";
+// kiiii/error：错误协议（跨端公共概念——服务端函数、客户端、普通模块都可能用到）。
+// 设计标准：零依赖自包含——不 import 任何 kiiii 内部模块与第三方（纯 JS、无副作用），
+// 任何环境（浏览器 / 服务端 / 测试 / 任意打包器）import 都绝对安全。
+
+const isError = (v: unknown): v is Error => v instanceof Error;
 
 /**
  * 业务错误：服务端显式抛出（new KiiiiError），客户端经网络还原后以同形态错误 reject——

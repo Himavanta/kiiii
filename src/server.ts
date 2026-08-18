@@ -8,12 +8,11 @@ import { pathToFileURL } from "node:url";
 import { parse, stringify } from "devalue";
 import { isFunction } from "./guards.ts";
 
-// server 子路径导出：模块表组装与路由哈希（生成代码 import "kiiii/server" 使用），
-// 以及错误协议（公共概念，主来源 kiiii/shared）
+// server 子路径导出：模块表组装与路由哈希（生成代码 import "kiiii/server" 使用）。
+// 错误协议不在 server 导出——跨端公共概念，唯一主来源 kiiii/error
 export { buildModuleMap } from "./modules.ts";
 export { routeHash } from "./hash.ts";
-import { isKiiiiError, KiiiiError } from "./shared.ts";
-export { isKiiiiError, KiiiiError };
+import { isKiiiiError } from "./error.ts";
 
 /**
  * 服务端函数上下文：由分发器通过 `fn.call(context, ...args)` 注入，函数内用 `this` 读取。

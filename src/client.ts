@@ -1,9 +1,8 @@
 import { parse, stringify } from "devalue";
 import { isFunction, isObject, isString } from "./guards.ts";
-import { isKiiiiError, KiiiiError } from "./shared.ts";
+import { KiiiiError } from "./error.ts";
 
-// client 子路径重新导出错误协议：客户端判断还原错误（isKiiiiError / KiiiiError.code）
-export { isKiiiiError, KiiiiError };
+// 错误协议不在 client 导出——跨端公共概念，唯一主来源 kiiii/error
 
 /** 内部标记：挂在返回的 Promise 上，供 cancel() 取出 AbortController */
 const CANCEL_KEY = Symbol("kiiii.cancel");

@@ -18,7 +18,7 @@ export default defineConfig({
 
 ```ts
 // src/api/greet.server.ts —— 服务端函数（文件即函数，默认导出）
-import { KiiiiError } from "kiiii/server"; // 错误协议（两端共用）
+import { KiiiiError } from "kiiii/error"; // 错误协议（跨端公共入口）
 import type { KiiiiContext } from "kiiii/server";
 
 export default async function greet(name: string): Promise<string> {
@@ -31,6 +31,11 @@ export default async function greet(name: string): Promise<string> {
 // 客户端：与普通函数调用无区别（类型来自原文件签名）
 import greet from "./api/greet.server.ts";
 const result = await greet("World");
+```
+
+```ts
+// 普通模块（非 .server.ts）需要业务错误时：从 kiiii/error 拿（跨端公共入口，零依赖）
+import { KiiiiError, isKiiiiError } from "kiiii/error";
 ```
 
 ## 特性

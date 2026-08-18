@@ -11,8 +11,10 @@ import { routeHash } from "../src/hash.ts";
 
 const prefix = "kiiii";
 const route = routeHash("/tests/fixtures/echo.server.ts");
+const failRoute = routeHash("/tests/fixtures/fail.server.ts");
 const modules = {
   [route]: () => import("./fixtures/echo.server.ts"),
+  [failRoute]: () => import("./fixtures/fail.server.ts"),
 };
 
 let base = "";
@@ -38,6 +40,16 @@ async function invoke(value: unknown): Promise<unknown> {
     body: stringify([value]),
   });
   expect(res.ok).toBe(true);
+  return parse(await res.text());
+}
+
+async function invokeFail(): Promise<unknown> {
+  const res = await fetch(`${base}/${prefix}/${failRoute}`, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain" },
+    body: stringify([]),
+  });
+  expect(res.ok).toBe(true); // 业务错误走 200 + 信封
   return parse(await res.text());
 }
 
@@ -116,4 +128,21 @@ test("URL 实例还原", async () => {
   const result = await invoke(new URL("https://example.com/path?q=1"));
   expect(result).toBeInstanceOf(URL);
   expect((result as URL).href).toBe("https://example.com/path?q=1");
+});
+
+test("业务错误信封：KiiiiError 跨网络还原（message/code/data 保真）", async () => {
+  const envelope = (await invokeFail()) as {
+    ok: false;
+    name: string;
+    message: string;
+    code: string;
+    data: { at: Date };
+  };
+  expect(envelope.ok).toBe(false);
+  expect(envelope.name).toBe("KiiiiError");
+  expect(envelope.message).toBe("业务失败");
+  expect(envelope.code).toBe("BUSINESS_FAIL");
+  // data 复杂类型保真（Date 实例还原）
+  expect(envelope.data.at).toBeInstanceOf(Date);
+  expect(envelope.data.at.getTime()).toBe(new Date("2024-01-01T00:00:00.000Z").getTime());
 });
