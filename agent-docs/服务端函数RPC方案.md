@@ -133,7 +133,7 @@ export default (function (this: RpcContext, name: string) {
 ```
 Vite 插件 src/rpc/plugin.ts（vite.config.ts 注册）
   ├─ 配置：rpc({ pattern?, prefix?, timeout? })——pattern 是唯一事实来源
-  │     （默认 /src/**\/*.server.ts），目录与后缀完全放开；无服务器入口文件
+  │     必填（如 /src/**\/*.server.ts，支持数组），目录与后缀完全放开；无服务器入口文件
   ├─ config 钩子：build 时声明 SSR 构建（ssr: true + rolldownOptions.input =
   │     虚拟入口 fly-rpc:server）——Vite 标准流程注入完整服务器环境；dev 不受影响
   ├─ buildApp 钩子：一个 vp build 完成两个环境——先服务器（→ 打包根 dist），
@@ -164,7 +164,7 @@ runtime src/rpc/server.ts（dev/prod 共用）
 
 - **无 server/index.ts**：服务器入口由插件生成（虚拟模块 fly-rpc:server，内容 = createRpcServer
   调用 + 模块表 import），SSR 构建以它为 input；用户项目零服务器代码
-- **pattern 是唯一事实来源**（插件选项，默认 "/src/**\/*.server.ts"）：
+- **pattern 是唯一事实来源**（插件选项，必填，支持数组如 ["/src/**\/\*.server.ts", "/api/**\/*.actions.ts"]）：
   - 生产：模块表虚拟模块 fly-rpc:modules 内容 = `import.meta.glob(pattern)`，构建时
     vite:import-glob 展开为 lazy chunks，route = routeHash(相对 root 的完整路径)，哈希碰撞报错
   - 客户端：resolveId 用 createFilter(pattern) 精确匹配（glob 语义完整，单层/递归不误判）

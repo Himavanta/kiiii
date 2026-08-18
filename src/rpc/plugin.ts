@@ -8,22 +8,32 @@ import { toNodeHandler } from "h3/node";
 import { createRpcHandler } from "./server";
 import type { RpcModuleMap } from "./server";
 import { routeHash } from "./hash";
+import { isArray, isEmpty, isNil } from "./guards";
 
-/** 虚拟模块前缀：服务器入口/模块表/客户端 stub 统一走 \0fly-rpc:* */
-const VIRTUAL_PREFIX = "\0fly-rpc:";
-/** 服务器入口虚拟模块（SSR 构建入口） */
+/**
+ * Vite 虚拟模块约定：虚拟 id 必须以 \0 开头——
+ * \0 不是合法文件名字符，保证虚拟 id 不可能与真实文件路径冲突，
+ * 其他插件据此（id.startsWith('\0')）识别并跳过虚拟模块。
+ */
+const virtual = (id: string): string => `\0${id}`;
+
+/** 服务器入口虚拟模块（公开名 → 内部 \0 id） */
 const SERVER_MODULE = "fly-rpc:server";
-/** 模块表虚拟模块：内容 = import.meta.glob(pattern)，dev 运行时转换 / 生产构建期展开 */
+const SERVER_ID = virtual(SERVER_MODULE);
+/** 模块表虚拟模块（公开名 → 内部 \0 id） */
 const MODULES_MODULE = "fly-rpc:modules";
+const MODULES_ID = virtual(MODULES_MODULE);
+/** 客户端 stub 虚拟模块前缀（\0fly-rpc:{route}） */
+const VIRTUAL_PREFIX = virtual("fly-rpc:");
 
 export interface RpcPluginOptions {
   /**
-   * glob pattern（相对项目 root）或 pattern 数组（多重匹配，目录/后缀完全放开），
-   * 默认 "/src/**\/*.server.ts"。pattern 决定哪些文件是服务器模块——
-   * 客户端 import 命中 pattern 的文件会被替换为 RPC 调用，注意勿包含普通模块
+   * glob pattern（相对项目 root）或 pattern 数组（多重匹配，目录/后缀完全放开）。
+   * 必填——决定哪些文件是服务器模块：客户端 import 命中 pattern 的文件会被替换为
+   * RPC 调用，注意勿包含普通模块
    */
-  pattern?: string | string[];
-  /** URL 前缀，默认 "rpc"（端点形如 /rpc/{文件名}-{hash}） */
+  pattern: string | string[];
+  /** URL 前缀，默认 "rpc"（端点形如 /rpc/{hash}） */
   prefix?: string;
   /** 客户端调用超时（毫秒），0 关闭，默认 30_000 */
   timeout?: number;
@@ -40,10 +50,13 @@ export interface RpcPluginOptions {
  *   - 生产：SSR 构建以虚拟入口（fly-rpc:server）为 input，入口 import 模块表虚拟模块，
  *     glob 构建期展开为 lazy chunks
  * - 无服务器入口文件（server/index.ts 不需要），入口代码由插件生成（createRpcServer 封装） */
-export function rpc(options: RpcPluginOptions = {}): Plugin {
-  const pattern = options.pattern ?? "/src/**/*.server.ts";
-  const prefix = options.prefix ?? "rpc";
-  const timeout = options.timeout ?? 30_000;
+export function rpc(options?: RpcPluginOptions): Plugin {
+  const pattern = options?.pattern;
+  if (isNil(pattern) || (isArray(pattern) && isEmpty(pattern))) {
+    throw new Error('[fly-rpc] pattern 选项必填（如 "/src/**/*.server.ts"）');
+  }
+  const prefix = options?.prefix ?? "rpc";
+  const timeout = options?.timeout ?? 30_000;
   let root = "";
   let serverPath = "";
   let clientPath = "";
@@ -115,11 +128,11 @@ export function rpc(options: RpcPluginOptions = {}): Plugin {
 
     async resolveId(source, importer, resolveOptions) {
       // 虚拟模块（服务器入口 + 模块表）：SSR 构建与 dev 的 ssrLoadModule 都要解析
-      if (source === SERVER_MODULE) return VIRTUAL_PREFIX + "server";
-      if (source === MODULES_MODULE) return VIRTUAL_PREFIX + "modules";
+      if (source === SERVER_MODULE) return SERVER_ID;
+      if (source === MODULES_MODULE) return MODULES_ID;
 
       // SSR 解析不拦截（服务端要加载原文件）
-      if (resolveOptions?.ssr || importer == null) return null;
+      if (resolveOptions?.ssr || isNil(importer)) return null;
 
       // 解析为绝对路径；pattern 精确匹配（相对 root 的路径），命中则转 stub
       const resolved = await this.resolve(source, importer, { skipSelf: true });
@@ -131,10 +144,10 @@ export function rpc(options: RpcPluginOptions = {}): Plugin {
     },
 
     load(id) {
-      if (id === VIRTUAL_PREFIX + "server") {
+      if (id === SERVER_ID) {
         return generateServerEntry(serverPath, prefix);
       }
-      if (id === VIRTUAL_PREFIX + "modules") {
+      if (id === MODULES_ID) {
         return generateModules(pattern, modulesPath);
       }
       if (!id.startsWith(VIRTUAL_PREFIX)) return null;
@@ -166,7 +179,7 @@ async function handleDevRpc(
   res: ServerResponse,
 ): Promise<void> {
   try {
-    const cached = server.moduleGraph.getModuleById(VIRTUAL_PREFIX + "modules");
+    const cached = server.moduleGraph.getModuleById(MODULES_ID);
     if (cached) server.moduleGraph.invalidateModule(cached);
     const mod = await server.ssrLoadModule(MODULES_MODULE);
     const modules = mod.default as RpcModuleMap;
@@ -191,15 +204,19 @@ function toRoute(id: string, root: string, isServerModule: (id: string) => boole
   if (!isServerModule(normalized)) return null;
   return routeHash(normalized);
 }
+/**
+ * 值 → JS 字面量（嵌入生成代码）。
+ * 所有生成代码的插值必须经过它（JSON.stringify 转义），防止注入与语法破坏。
+ */
+const lit = (value: unknown): string => JSON.stringify(value);
+
 /** 生成服务器入口（虚拟模块）：最少逻辑——createRpcServer + 模块表，prefix 由插件选项注入 */
 function generateServerEntry(serverPath: string, prefix: string): string {
-  const safeServer = JSON.stringify(serverPath);
-  const safePrefix = JSON.stringify(prefix);
-  return `import { createRpcServer } from ${safeServer};
+  return `import { createRpcServer } from ${lit(serverPath)};
 import modules from "fly-rpc:modules";
 
 // 由 fly-rpc 生成的服务器入口（虚拟模块）：RPC + 静态资源 + SPA fallback + listhen
-await createRpcServer({ prefix: ${safePrefix}, modules });
+await createRpcServer({ prefix: ${lit(prefix)}, modules });
 `;
 }
 
@@ -208,25 +225,19 @@ await createRpcServer({ prefix: ${safePrefix}, modules });
  * 且虚拟模块按 JS 解析不能带泛型），组装逻辑封装在 buildModuleMap（src/rpc/modules.ts）。
  */
 function generateModules(pattern: string | string[], modulesPath: string): string {
-  const safePattern = JSON.stringify(pattern);
-  const safeModules = JSON.stringify(modulesPath);
-  return `import { buildModuleMap } from ${safeModules};
-const globs = import.meta.glob(${safePattern});
+  return `import { buildModuleMap } from ${lit(modulesPath)};
+const globs = import.meta.glob(${lit(pattern)});
 export default buildModuleMap(globs);
 `;
 }
 
-/** 生成客户端 stub：替换服务器模块为 fetch 调用（所有插值经 JSON.stringify 转义） */
+/** 生成客户端 stub：替换服务器模块为 fetch 调用（所有插值经 lit 转义） */
 function generateStub(route: string, prefix: string, timeout: number, clientPath: string): string {
-  const safeRoute = JSON.stringify(route);
-  const safePrefix = JSON.stringify(prefix);
-  const safeClient = JSON.stringify(clientPath);
   return `
-import { rpcCall } from ${safeClient};
-
+import { rpcCall } from ${lit(clientPath)};
 
 // 由 fly-rpc 生成的客户端 stub：运行时替换服务端函数为 fetch 调用
 // 类型来自原文件（编辑器解析磁盘上的服务器模块文件），行为与签名一致
-export default (...args) => rpcCall(${safePrefix}, ${safeRoute}, args, ${timeout});
+export default (...args) => rpcCall(${lit(prefix)}, ${lit(route)}, args, ${timeout});
 `;
 }

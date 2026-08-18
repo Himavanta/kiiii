@@ -1,4 +1,5 @@
 import { parse, stringify } from "devalue";
+import { isFunction, isObject, isString } from "./guards";
 
 /**
  * RPC 调用错误：业务错误（服务端 RpcError）跨网络还原后的形态。
@@ -14,15 +15,17 @@ const CANCEL_KEY = Symbol("fly-rpc.cancel");
 
 export type CancelablePromise<T> = Promise<T> & { [CANCEL_KEY]?: (reason?: string) => void };
 
-function isErrorEnvelope(
-  value: unknown,
-): value is { ok: false; name: string; message: string; code?: string; data?: unknown } {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    (value as Record<string, unknown>).ok === false &&
-    typeof (value as Record<string, unknown>).message === "string"
-  );
+/** 业务错误信封（服务端 RpcError 序列化形态，见 server.ts 的协议） */
+interface RpcErrorEnvelope {
+  ok: false;
+  name: string;
+  message: string;
+  code?: string;
+  data?: unknown;
+}
+
+function isErrorEnvelope(value: unknown): value is RpcErrorEnvelope {
+  return isObject(value) && value.ok === false && isString(value.message);
 }
 
 /**
@@ -85,7 +88,7 @@ export function rpcCall(
  */
 export function rpcCancel(promise: Promise<unknown>, reason?: string): void {
   const cancel = (promise as Partial<CancelablePromise<unknown>>)[CANCEL_KEY];
-  if (typeof cancel === "function") {
+  if (isFunction(cancel)) {
     cancel(reason);
   }
 }

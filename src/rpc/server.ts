@@ -6,6 +6,7 @@ import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parse, stringify } from "devalue";
+import { isError, isFunction } from "./guards";
 
 /**
  * 业务错误：显式抛出后其 message/code/data 会跨网络到达客户端
@@ -40,7 +41,7 @@ export interface RpcContext {
  * （ssrLoadModule）会各自加载一份 server.ts，instanceof 跨模块实例会失效。
  */
 export function isRpcError(error: unknown): error is RpcError {
-  return error instanceof Error && error.name === "RpcError";
+  return isError(error) && error.name === "RpcError";
 }
 
 /** 路由 → 模块加载器。路由 = 相对项目 root 的路径（去 pattern 静态前缀与文件后缀），如 "api/greet" */
@@ -71,15 +72,16 @@ export function createRpcHandler(options: RpcHandlerOptions) {
 
   return defineEventHandler(async (event) => {
     // 方法限制（协议层）
-    if (event.method !== "POST") {
+    if (event.req.method !== "POST") {
       throw new HTTPError("Method Not Allowed", { status: 405 });
     }
 
-    // 路由解析：/rpc/actions/greet → route = "actions/greet"
-    if (!event.path.startsWith(`/${prefix}/`)) {
+    // 路由解析：/rpc/actions/greet → route = "actions/greet"（h3 2.0：event.path 已弃用，用 url.pathname）
+    const pathname = event.url.pathname;
+    if (!pathname.startsWith(`/${prefix}/`)) {
       throw new HTTPError("Not Found", { status: 404 });
     }
-    const route = event.path.slice(prefix.length + 2);
+    const route = pathname.slice(prefix.length + 2);
     // 路径消毒：拒绝空段 / 穿越段（URL 段只作为模块表的 key，不做文件系统拼接）
     if (
       !route ||
@@ -124,7 +126,7 @@ export function createRpcHandler(options: RpcHandlerOptions) {
 
     const mod = await loader();
     const fn = mod.default;
-    if (typeof fn !== "function") {
+    if (!isFunction(fn)) {
       throw new HTTPError("Internal Server Error", { status: 500 });
     }
 
