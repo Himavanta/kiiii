@@ -1,6 +1,6 @@
 {
   "name": "kiiii",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Server actions for Vite: write functions in any file and call them directly from the client - type-safe (types from original signatures), devalue serialization, dev/prod consistent",
   "keywords": [
     "api",
