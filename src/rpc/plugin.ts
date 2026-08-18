@@ -37,6 +37,11 @@ export interface RpcPluginOptions {
   prefix?: string;
   /** 客户端调用超时（毫秒），0 关闭，默认 30_000 */
   timeout?: number;
+  /**
+   * 服务器产物是否打包全部依赖（自包含部署），默认 true。
+   * false 时依赖保持 external——运行时从部署环境的 node_modules 解析（需安装 dependencies）
+   */
+  bundleDeps?: boolean;
 }
 
 /**
@@ -57,6 +62,7 @@ export function rpc(options?: RpcPluginOptions): Plugin {
   }
   const prefix = options?.prefix ?? "rpc";
   const timeout = options?.timeout ?? 30_000;
+  const bundleDeps = options?.bundleDeps ?? true;
   let root = "";
   let serverPath = "";
   let clientPath = "";
@@ -91,6 +97,8 @@ export function rpc(options?: RpcPluginOptions): Plugin {
           copyPublicDir: false, // public 属于客户端
           rolldownOptions: { input: { index: SERVER_MODULE } },
         },
+        // 依赖打包策略：bundleDeps=true 全量打包（自包含）；false 时不传 noExternal（保持默认 external）
+        ...(bundleDeps ? { ssr: { noExternal: true } } : {}),
       };
     },
 
