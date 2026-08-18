@@ -10,12 +10,14 @@ import { join } from "node:path";
 import { parse, stringify } from "devalue";
 import { kiiii } from "../src/plugin.ts";
 import { routeHash } from "../src/hash.ts";
+import { invoke, cancel } from "../src/client.ts";
 
 const root = join(import.meta.dirname, "fixtures", "dev-app");
 const srcDir = join(root, "src", "api");
 const tempFile = join(srcDir, "temp.server.ts");
 const tempRoute = routeHash("/src/api/temp.server.ts");
 const helloRoute = routeHash("/src/api/hello.server.ts");
+const slowRoute = routeHash("/src/api/slow.server.ts");
 const prefix = "kiiii";
 
 let vite: ViteDevServer;
@@ -60,6 +62,13 @@ beforeAll(async () => {
   httpServer = createHttpServer(vite.middlewares);
   await new Promise<void>((resolve) => httpServer.listen(0, resolve));
   base = `http://localhost:${(httpServer.address() as AddressInfo).port}`;
+
+  // invoke 用相对路径 fetch（浏览器约定）；node 测试环境补 base
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    const url = typeof input === "string" && input.startsWith("/") ? `${base}${input}` : input;
+    return origFetch(url as never, init);
+  }) as typeof fetch;
 });
 
 afterAll(async () => {
@@ -108,4 +117,35 @@ test("删除文件：旧路由 404", async () => {
   await unlink(tempFile);
   await removed;
   expect(await call(tempRoute, false)).toBe(404);
+});
+
+test("超时：invoke 超时后 reject（TimeoutError）", async () => {
+  await expect(invoke(prefix, slowRoute, [10], 200)).rejects.toMatchObject({
+    name: "TimeoutError",
+  });
+});
+
+test("主动取消：cancel(promise) 使调用 reject", async () => {
+  const promise = invoke(prefix, slowRoute, [10], 0);
+  cancel(promise, "用户取消了");
+  await expect(promise).rejects.toBeDefined();
+});
+
+test("取消与超时不产生 [kiiii] 错误日志（预期行为静默）", async () => {
+  const errors: unknown[][] = [];
+  const original = console.error;
+  console.error = (...args) => {
+    errors.push(args);
+    original(...args);
+  };
+  try {
+    const promise = invoke(prefix, slowRoute, [10], 0);
+    cancel(promise, "用户取消了");
+    await promise.catch(() => {});
+    await invoke(prefix, slowRoute, [10], 200).catch(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 300)); // 等服务端处理完
+    expect(errors.filter((args) => String(args[0]).includes("[kiiii]"))).toHaveLength(0);
+  } finally {
+    console.error = original;
+  }
 });
