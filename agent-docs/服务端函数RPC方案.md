@@ -46,7 +46,9 @@
 ### D1：文件即函数 —— 每个 `.server.ts` 只导出 `export default`
 
 - 一个文件 = 一个服务端函数（MVP）。
-- **路由 = 相对 scanRoot 的路径**（保留目录层级）：`src/actions/greet.server.ts` → `POST /rpc/actions/greet`（去掉 `.server` 后缀）。用路径而非纯文件名，避免 glob 递归下的同名冲突（`src/actions/todo.server.ts` vs `src/admin/todo.server.ts`）。
+- **路由 = 相对项目 root 的路径（去 pattern 静态前缀与后缀）**（保留目录层级）：
+  pattern `/src/**\/*.server.ts` 下 `src/actions/greet.server.ts` → `POST /rpc/actions/greet`。
+  用路径而非纯文件名，避免 glob 递归下的同名冲突（`src/actions/todo.server.ts` vs `src/admin/todo.server.ts`）。
 - 红利：客户端 stub 不需要知道导出列表（default 约定，本地名用户自取）；服务端注册表退化为"路由名 → 文件路径"；**连构建时的模块加载和导出遍历都省了**，加载延迟到请求时。
 - 扩展预留：default 导出对象时路由加方法段（`/rpc/:name/:method`），MVP 不做。
 
@@ -127,56 +129,59 @@ export default (function (this: RpcContext, name: string) {
 ### 4.1 模块划分
 
 ```
-Vite 插件 src/rpc/plugin.ts（vite.config.ts 注册，约 120 行）
-  ├─ config 钩子：build 时声明 SSR 入口（build.ssr = serverEntry 选项），
-  │     Vite 标准流程据此注入完整的服务器环境（node 解析、依赖外部化）；dev 不受影响
+Vite 插件 src/rpc/plugin.ts（vite.config.ts 注册）
+  ├─ 配置：rpc({ pattern?, prefix?, timeout? })——pattern 是唯一事实来源
+  │     （默认 /src/**\/*.server.ts），目录与后缀完全放开；无服务器入口文件
+  ├─ config 钩子：build 时声明 SSR 构建（ssr: true + rolldownOptions.input =
+  │     虚拟入口 fly-rpc:server）——Vite 标准流程注入完整服务器环境；dev 不受影响
   ├─ buildApp 钩子：一个 vp build 完成两个环境——先服务器（→ 打包根 dist），
-  │     再重定向客户端 outDir → {打包根}/clients 并构建
+  │     再重定向客户端 outDir → {打包根}/clients 并构建（清掉继承的服务器入口 input）
   ├─ resolveId(source, importer, options)
-  │     source 以 .server.ts 结尾 && !options.ssr → 返回虚拟 id
+  │     fly-rpc:server / fly-rpc:modules → 虚拟 id；客户端 import 命中 pattern
+  │     （createFilter 精确匹配）&& !options.ssr → 虚拟 stub id
   ├─ load(id)
-  │     是虚拟 id → 返回 stub 字符串
+  │     入口虚拟模块 → createRpcServer 调用代码；模块表虚拟模块 → import.meta.glob
+  │     （vite:import-glob 转换，注意不能带泛型——虚拟模块按 JS 解析）；stub → fetch 调用
   └─ configureServer(server)
-        server.middlewares.use(rpcHandler)   // dev 接线
+        dev 接线：invalidate 模块表虚拟模块 + ssrLoadModule（新增文件即用，无目录扫描）
 
 runtime src/rpc/server.ts（dev/prod 共用）
   ├─ createRpcHandler：RPC 分发 handler（h3）
-  ├─ createRpcServer：生产服务器封装（RPC + 静态资源 + SPA fallback + listhen），
-  │     用户显式入口（server/index.ts）只写几行配置
-  └─ fromGlob / RpcError / RpcContext / isRpcError
-
-显式服务器入口 server/index.ts（用户项目，内容极少）
-  ├─ createRpcServer({ modules: fromGlob(import.meta.glob("/src/**/*.server.ts")) })
-  └─ 构建：单个 vp build（入口经插件选项 serverEntry 传入，不暴露打包参数）
+  ├─ createRpcServer：生产服务器封装（RPC + 静态资源 + SPA fallback + listhen）
+  └─ RpcError / RpcContext / isRpcError
 ```
 
 ### 4.2 dev 接线
 
-- `configureServer` 中挂 handler；`import.meta.glob` 的 lazy 加载 + Vite 模块图负责 TS 转换、模块缓存与 HMR 失效（**这是本方案唯一会咬人的细节，不能裸动态 import**）。
+- `configureServer` 中挂 handler；每次请求 invalidate + `ssrLoadModule` 模块表虚拟模块
+  （内容 = `import.meta.glob(pattern)`，dev 下由 vite:import-glob 转换）——模块表 lazy 加载器
+  走 Vite 模块图，负责 TS 转换、模块缓存与 HMR 失效；invalidate 使 glob 重新匹配，
+  **新增 .server.ts 文件无需重启 dev**（已验证）。
 
-### 4.3 prod 接线（已落实，见 server/index.ts + src/rpc/server.ts 的 createRpcServer）
+### 4.3 prod 接线（已落实，无服务器入口文件——虚拟模块方案）
 
-- **显式服务器入口 `server/index.ts`**（用户项目文件，内容极少——内部逻辑全部封装在 `createRpcServer`）：
-
-  ```ts
-  await createRpcServer({
-    prefix: "rpc",
-    modules: fromGlob(import.meta.glob("/src/**/*.server.ts")),
-  });
-  ```
-
+- **无 server/index.ts**：服务器入口由插件生成（虚拟模块 fly-rpc:server，内容 = createRpcServer
+  调用 + 模块表 import），SSR 构建以它为 input；用户项目零服务器代码
+- **pattern 是唯一事实来源**（插件选项，默认 "/src/**\/*.server.ts"）：
+  - 生产：模块表虚拟模块 fly-rpc:modules 内容 = `import.meta.glob(pattern)`，构建时
+    vite:import-glob 展开为 lazy chunks，route = key 去静态前缀与后缀
+  - 客户端：resolveId 用 createFilter(pattern) 精确匹配（glob 语义完整，单层/递归不误判）
+  - dev：ssrLoadModule(模块表虚拟模块)——import.meta.glob 在 dev 下由 Vite 转换，
+    无目录扫描；每次请求 invalidate 模块表（新增 .server.ts 文件即用，已验证）
 - **createRpcServer 封装**（同一 h3 app、单端口组合四件事）：
-  1. RPC：`createRpcHandler`——Rollup 构建时静态打包全部 .server.ts（各成独立 chunk），请求时 lazy 加载
-  2. 静态资源：h3 `serveStatic` + fs 后端（getMeta 用 fs.stat 提供 type/size/mtime/弱 etag，getContents 读文件）——etag/304/Last-Modified 已验证；目录为固定约定 `{项目根}/dist/clients`（服务器入口在打包根 dist，从项目根启动时 ./clients 即客户端产物；需自定义时传 staticDir 绝对路径或 file: URL）
-  3. SPA fallback：静态未命中 → 读 index.html 返回（history 路由）
-  4. 监听：listhen（PORT 环境变量可配，默认 3000）——必须传 `toNodeHandler(app)`（h3 对象的 handler 是事件形态，直接传 app 会挂起）
+  1. RPC：createRpcHandler——模块表（glob 展开）请求时 lazy 加载分发
+  2. 静态资源：h3 serveStatic + fs 后端（etag/304 已验证）；目录固定约定 {项目根}/dist/clients
+  3. SPA fallback：静态未命中 → index.html
+  4. 监听：listhen（PORT 环境变量可配，默认 3000）
 - **构建**：`pnpm build` = `tsc && vp build`——插件 buildApp 钩子接管，单个命令完成两个环境：
-  先服务器（SSR 打包 serverEntry → 打包根，清空 dist 根），后客户端（outDir 重定向到
-  dist/clients，只清空自己的目录）；产物 dist/index.js + dist/assets/* + dist/clients/*，
-  无嵌套构建、无 emptyOutDir 冲突、无打包参数暴露（入口由插件选项 serverEntry 传入，
-  默认 "server/index.ts"）
+  先服务器（SSR → 打包根，清空 dist 根），后客户端（outDir 重定向到 dist/clients）；
+  产物 dist/index.js + dist/assets/* + dist/clients/*，无嵌套构建、无 emptyOutDir 冲突、
+  无打包参数暴露
 - **运行**：`node dist/index.js`（PORT 环境变量可配，默认 3000）
-- **构建编排的取舍**：早期尝试过嵌套构建自动合成（环境变量防递归等机制），为省一个命令引入不稳定不值，已否决；最终形态是插件 buildApp 钩子接管 vite-plus builder 的双环境构建（config 钩子声明 SSR 入口让 Vite 标准流程生成服务器环境，buildApp 钩子只做 outDir 重定向与顺序构建）——入口文件的 glob pattern 与客户端插件选项（scanRoot）各自显式、互相独立，改 scanRoot 需同步两处
+- **构建编排的取舍**：早期尝试过嵌套构建自动合成（环境变量防递归等机制），为省一个命令引入
+  不稳定不值，已否决；也试过显式入口文件 + glob 声明 + 正则提取 pattern（入口为唯一来源），
+  最终形态是 pattern 显式配置 + 虚拟入口（config 钩子声明 SSR 构建、buildApp 钩子双环境编排）
+- **逃生舱**：高级用户可自写服务器入口（import { createRpcServer } 手动组装）不依赖插件构建
 - **静态服务不需要单独部署**：RPC 与静态资源在同一 app、同一端口；若将来静态资源要上 CDN/nginx，只需把 RPC 前缀保留在服务器、静态交 CDN，无需改代码
 - **etag 细节**：serveStatic 只在 getMeta 提供 etag 字段时才处理 If-None-Match（弱 etag：`W/"{size}-{mtimeMs}"`），否则只有 Last-Modified
 
@@ -272,7 +277,7 @@ Body: stringify(args)   // 位置参数数组，与函数声明完全一致
 - "传输编码"：JSON 有类型谎言（Date→string 静默变形），devalue 的 stringify/parse 保真全部内置复杂类型且显式报错——"怎么声明怎么调用、类型与运行时一致"的完整答案。
 - "错误协议"：两类失败分开——协议错误走状态码，业务错误走 RpcError 信封（stub reject 保持 try/catch 与本地调用一致）；普通 throw 的意外错误不跨网络；与 rpc-master 的分歧在于业务错误生产也传（产品的一部分），而非按环境区分。
 - "取消"：服务端 this.signal 必做（连接断开自动 abort）；客户端 per-call cancel 在"类型来自原文件"下无法类型安全暴露（Promise<T> 无 cancel），rpc-master 的 { data, cancel } 正是为类型安全暴露取消付出的包装代价——折中为全局超时 + rpcCancel(p) 辅助函数。
-- "prod 加载"：import.meta.glob 是标准答案——Rollup 静态打包 + dev lazy 加载 HMR 失效，dev/prod 同一份代码；由此路由定为"相对 scanRoot 路径"而非纯文件名（防递归同名冲突）。
+- "prod 加载"：import.meta.glob 是标准答案——Rollup 静态打包 + dev lazy 加载 HMR 失效，dev/prod 同一份代码；由此路由定为"相对项目 root 去 pattern 前缀"而非纯文件名（防递归同名冲突）。
 
 ## 实现阶段的坑（初始版本已踩平，备忘）
 

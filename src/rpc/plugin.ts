@@ -1,81 +1,104 @@
 import type { Plugin, ResolvedConfig, ViteDevServer } from "vite";
-import { readdir } from "node:fs/promises";
+import { createFilter } from "vite";
 import { join, relative, isAbsolute } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { H3 } from "h3";
 import { toNodeHandler } from "h3/node";
 import { createRpcHandler } from "./server";
 import type { RpcModuleMap } from "./server";
+import { routeHash } from "./hash";
 
-const SERVER_FILE_RE = /\.server\.ts$/;
-/** 虚拟模块前缀：客户端 import .server.ts 时被重写为 \0fly-rpc:{route} */
+/** 虚拟模块前缀：服务器入口/模块表/客户端 stub 统一走 \0fly-rpc:* */
 const VIRTUAL_PREFIX = "\0fly-rpc:";
+/** 服务器入口虚拟模块（SSR 构建入口） */
+const SERVER_MODULE = "fly-rpc:server";
+/** 模块表虚拟模块：内容 = import.meta.glob(pattern)，dev 运行时转换 / 生产构建期展开 */
+const MODULES_MODULE = "fly-rpc:modules";
 
 export interface RpcPluginOptions {
-  /** URL 前缀，默认 "rpc"（端点形如 /rpc/actions/greet） */
+  /**
+   * glob pattern（相对项目 root），默认 "/src/**\/*.server.ts"。
+   * 唯一事实来源：dev 模块表、客户端拦截、生产打包全部由它推导，目录与后缀完全放开
+   * （如 "/api/**\/*.actions.ts"）。pattern 决定哪些文件是服务器模块——
+   * 客户端 import 命中 pattern 的文件会被替换为 RPC 调用，注意勿包含普通模块
+   */
+  pattern?: string;
+  /** URL 前缀，默认 "rpc"（端点形如 /rpc/{routeHash}） */
   prefix?: string;
   /** 客户端调用超时（毫秒），0 关闭，默认 30_000 */
   timeout?: number;
-  /** 服务端函数扫描根目录（相对项目 root），默认 "src" */
-  scanRoot?: string;
-  /** 服务器入口（相对项目 root），默认 "server/index.ts" */
-  serverEntry?: string;
 }
 
 /**
  * fly-rpc Vite 插件。
  *
- * - 客户端构建：resolveId 拦截 *.server.ts 导入 → 虚拟 stub 模块（load 生成 fetch 调用）；
- *   服务端原文件保持不动（SSR 解析不拦截，dev 由 ssrLoadModule 加载）
- * - dev 模式：h3 RPC handler 挂到 Vite 中间件，每次请求扫描 + ssrLoadModule（HMR 失效）
- * - 构建模式：一个 vp build 完成两个环境——config 钩子声明 SSR 入口（build.ssr，
- *   由 Vite 标准流程生成服务器环境），buildApp 钩子先构建服务器（→ 打包根），
- *   再重定向客户端 outDir 到 {打包根}/clients 构建
- */
+ * - pattern 是唯一事实来源（不做后缀/目录推导）：route = routeHash(相对 root 的完整路径)，
+ *   三个消费端各自使用同一 pattern 匹配与同一 route 算法：
+ *   - dev：ssrLoadModule(模块表虚拟模块)——import.meta.glob 在 dev 下由 Vite 转换，
+ *     无需目录扫描；每次请求 invalidate 后重载（新增 .server.ts 文件即用）
+ *   - 客户端：resolveId 用 createFilter(pattern) 精确匹配 → 虚拟 stub（fetch 调用）
+ *   - 生产：SSR 构建以虚拟入口（fly-rpc:server）为 input，入口 import 模块表虚拟模块，
+ *     glob 构建期展开为 lazy chunks
+ * - 无服务器入口文件（server/index.ts 不需要），入口代码由插件生成（createRpcServer 封装） */
 export function rpc(options: RpcPluginOptions = {}): Plugin {
+  const pattern = options.pattern ?? "/src/**/*.server.ts";
   const prefix = options.prefix ?? "rpc";
   const timeout = options.timeout ?? 30_000;
-  const scanRootOption = options.scanRoot ?? "src";
-  const serverEntry = options.serverEntry ?? "server/index.ts";
-  let scanRoot = "";
+  let root = "";
+  let serverPath = "";
+  let clientPath = "";
+  let hashPath = "";
+  let isServerModule: ((id: string) => boolean) | null = null;
 
   return {
     name: "fly-rpc",
     enforce: "pre",
 
     configResolved(resolved: ResolvedConfig) {
-      scanRoot = join(resolved.root, scanRootOption);
+      root = resolved.root;
+      // 本插件 runtime 模块的相对路径（虚拟入口/模块表/客户端 stub 的 import 用，与包形态无关）
+      const rel = (file: string) =>
+        "/" + relative(root, fileURLToPath(new URL(file, import.meta.url))).replaceAll("\\", "/");
+      serverPath = rel("./server.ts");
+      clientPath = rel("./client.ts");
+      hashPath = rel("./hash.ts");
+      isServerModule = createFilter([pattern]);
     },
 
     /**
-     * 构建时声明 SSR 入口：Vite 标准流程（resolveConfig）自动注入完整的服务器环境
-     * （node 解析条件、依赖外部化等），无需手动拼装。dev 模式不受影响。
+     * 构建时声明 SSR 构建（入口 = 虚拟模块 fly-rpc:server，经 rolldownOptions.input 指定——
+     * build.ssr 为 true 而非字符串，字符串会被当作文件系统路径 resolve）。
+     * Vite 标准流程据此注入完整的服务器环境（node 解析、依赖外部化）。dev 不受影响。
      */
     config(_userConfig, env) {
       if (env.command !== "build") return;
       return {
         build: {
-          ssr: serverEntry, // 字符串入口（相对 root）
+          ssr: true,
           copyPublicDir: false, // public 属于客户端
+          rolldownOptions: { input: { index: SERVER_MODULE } },
         },
       };
     },
 
     /**
      * 接管构建（vite-plus/vite builder 的 buildApp 钩子）：一个 vp build 完成两个环境。
-     * 先服务器（SSR 打包 serverEntry → 打包根），后客户端（→ {打包根}/clients）。
-     * 所有打包参数都在插件内确定，不暴露给用户。
+     * 先服务器（SSR → 打包根），后客户端（→ {打包根}/clients）。所有打包参数都在插件内确定。
      */
     async buildApp(builder) {
       const { config } = builder;
       // 打包根（build.outDir 已 resolve 为绝对路径）：服务器产物在其根，客户端在其 {outDir}/clients
       const outDir = config.build.outDir;
-      // 重定向客户端 outDir 并恢复 public 拷贝（config 钩子的 copyPublicDir: false 会被继承）
+      // 客户端环境：清掉继承的服务器入口 input、重定向 outDir、恢复 public 拷贝
+      const { input: _serverInput, ...clientRolldown } =
+        config.environments.client.build.rolldownOptions ?? {};
       config.environments["client"] = {
         ...config.environments.client,
         build: {
           ...config.environments.client.build,
-          ssr: false, // 覆盖继承自顶层 build.ssr 的服务器入口
+          rolldownOptions: clientRolldown,
+          ssr: false,
           outDir: join(outDir, "clients"),
           copyPublicDir: true,
         },
@@ -92,23 +115,32 @@ export function rpc(options: RpcPluginOptions = {}): Plugin {
     },
 
     async resolveId(source, importer, resolveOptions) {
+      // 虚拟模块（服务器入口 + 模块表）：SSR 构建与 dev 的 ssrLoadModule 都要解析
+      if (source === SERVER_MODULE) return VIRTUAL_PREFIX + "server";
+      if (source === MODULES_MODULE) return VIRTUAL_PREFIX + "modules";
+
       // SSR 解析不拦截（服务端要加载原文件）
       if (resolveOptions?.ssr || importer == null) return null;
-      if (!SERVER_FILE_RE.test(source)) return null;
 
-      // 解析为绝对路径，计算路由；不在扫描根目录内的不拦截
+      // 解析为绝对路径；pattern 精确匹配（相对 root 的路径），命中则转 stub
       const resolved = await this.resolve(source, importer, { skipSelf: true });
       if (!resolved) return null;
-      const route = toRoute(resolved.id, scanRoot);
+      const route = toRoute(resolved.id, root, isServerModule!);
       if (!route) return null;
 
       return VIRTUAL_PREFIX + route;
     },
 
     load(id) {
+      if (id === VIRTUAL_PREFIX + "server") {
+        return generateServerEntry(serverPath, prefix);
+      }
+      if (id === VIRTUAL_PREFIX + "modules") {
+        return generateModules(pattern, hashPath);
+      }
       if (!id.startsWith(VIRTUAL_PREFIX)) return null;
       const route = id.slice(VIRTUAL_PREFIX.length);
-      return generateStub(route, prefix, timeout);
+      return generateStub(route, prefix, timeout, clientPath);
     },
 
     configureServer(server) {
@@ -121,22 +153,24 @@ export function rpc(options: RpcPluginOptions = {}): Plugin {
           next();
           return;
         }
-        void handleDevRpc(server, scanRoot, prefix, req, res);
+        void handleDevRpc(server, prefix, req, res);
       });
     },
   };
 }
 
-/** dev 请求处理：每次请求重新扫描文件 + 通过 ssrLoadModule 加载（HMR 自动失效） */
+/** dev 请求处理：重载模块表（invalidate 使 glob 重新匹配，新增文件即用）+ ssrLoadModule */
 async function handleDevRpc(
   server: ViteDevServer,
-  scanRoot: string,
   prefix: string,
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
   try {
-    const modules = await scanServerFiles(scanRoot, server);
+    const cached = server.moduleGraph.getModuleById(VIRTUAL_PREFIX + "modules");
+    if (cached) server.moduleGraph.invalidateModule(cached);
+    const mod = await server.ssrLoadModule(MODULES_MODULE);
+    const modules = mod.default as RpcModuleMap;
     const app = new H3();
     app.use(createRpcHandler({ modules, prefix, isDev: true }));
     toNodeHandler(app)(req, res);
@@ -147,56 +181,48 @@ async function handleDevRpc(
   }
 }
 
-/** 递归扫描扫描根目录下的 .server.ts 文件 */
-async function scanServerFiles(scanRoot: string, server: ViteDevServer): Promise<RpcModuleMap> {
-  const files: string[] = [];
-  await walkDir(scanRoot, files);
-  const modules: RpcModuleMap = {};
-  for (const file of files) {
-    const route = toRoute(file, scanRoot);
-    if (route) {
-      modules[route] = () => server.ssrLoadModule(file) as Promise<{ default: unknown }>;
-    }
-  }
-  return modules;
-}
-
-async function walkDir(dir: string, out: string[]): Promise<void> {
-  let entries;
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch {
-    return; // 目录不存在时静默跳过
-  }
-  for (const entry of entries) {
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      await walkDir(full, out);
-    } else if (SERVER_FILE_RE.test(entry.name)) {
-      out.push(full);
-    }
-  }
-}
-
 /**
- * 计算路由：相对扫描根目录的路径，去 .server.ts 后缀。
- * 扫描根目录之外的路径返回 null（不拦截）。
+ * 计算路由：相对项目 root 的完整路径的哈希（与生产模块表生成代码同一算法）。
+ * 不在 pattern 内的路径返回 null（不拦截）。
  */
-function toRoute(file: string, scanRoot: string): string | null {
-  const rel = relative(scanRoot, file);
+function toRoute(id: string, root: string, isServerModule: (id: string) => boolean): string | null {
+  const rel = relative(root, id);
   if (rel.startsWith("..") || isAbsolute(rel)) return null;
-  const normalized = rel.replaceAll("\\", "/");
-  if (!SERVER_FILE_RE.test(normalized)) return null;
-  const route = normalized.slice(0, -".server.ts".length);
-  return route || null;
+  const normalized = "/" + rel.replaceAll("\\", "/");
+  if (!isServerModule(normalized)) return null;
+  return routeHash(normalized);
+}
+/** 生成服务器入口（虚拟模块）：最少逻辑——createRpcServer + 模块表，prefix 由插件选项注入 */
+function generateServerEntry(serverPath: string, prefix: string): string {
+  const safeServer = JSON.stringify(serverPath);
+  const safePrefix = JSON.stringify(prefix);
+  return `import { createRpcServer } from ${safeServer};
+import modules from "fly-rpc:modules";
+
+// 由 fly-rpc 生成的服务器入口（虚拟模块）：RPC + 静态资源 + SPA fallback + listhen
+await createRpcServer({ prefix: ${safePrefix}, modules });
+`;
 }
 
-/** 生成客户端 stub：替换 .server.ts 模块为 fetch 调用（所有插值经 JSON.stringify 转义） */
-function generateStub(route: string, prefix: string, timeout: number): string {
+/** 生成模块表（虚拟模块）：import.meta.glob 构建期展开；route = routeHash(相对 root 的完整路径) */
+function generateModules(pattern: string, hashPath: string): string {
+  const safePattern = JSON.stringify(pattern);
+  const safeHash = JSON.stringify(hashPath);
+  return `import { routeHash } from ${safeHash};
+const globs = import.meta.glob(${safePattern});
+export default Object.fromEntries(
+  Object.entries(globs).map(([k, v]) => [routeHash(k), v]),
+);
+`;
+}
+
+/** 生成客户端 stub：替换服务器模块为 fetch 调用（所有插值经 JSON.stringify 转义） */
+function generateStub(route: string, prefix: string, timeout: number, clientPath: string): string {
   const safeRoute = JSON.stringify(route);
   const safePrefix = JSON.stringify(prefix);
+  const safeClient = JSON.stringify(clientPath);
   return `
-import { rpcCall } from "/src/rpc/client.ts";
+import { rpcCall } from ${safeClient};
 
 
 // 由 fly-rpc 生成的客户端 stub：运行时替换服务端函数为 fetch 调用

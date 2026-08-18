@@ -43,36 +43,11 @@ export function isRpcError(error: unknown): error is RpcError {
   return error instanceof Error && error.name === "RpcError";
 }
 
-/** 路由 → 模块加载器。路由 = 相对扫描根目录的路径（去 .server.ts 后缀），如 "actions/greet" */
+/** 路由 → 模块加载器。路由 = 相对项目 root 的路径（去 pattern 静态前缀与文件后缀），如 "api/greet" */
 export type RpcModuleMap = Record<string, () => Promise<{ default: unknown }>>;
 
-/**
- * 把 import.meta.glob 的结果转换为 RpcModuleMap（生产模式用法）。
- * import.meta.glob 由 Vite 构建时静态分析并打包全部匹配模块。
- *
- * ```ts
- * import { createRpcHandler, fromGlob } from "./rpc/server";
- * const globs = import.meta.glob("/src/**\/*.server.ts");
- * app.use(`/rpc/**`, createRpcHandler({ modules: fromGlob(globs) }));
- * ```
- *
- * @param globs - import.meta.glob 的返回（lazy 加载器表）
- * @param base - 扫描根目录（root 相对路径），默认 "/src/"
- */
-export function fromGlob(
-  globs: Record<string, () => Promise<{ default: unknown }>>,
-  base = "/src/",
-): RpcModuleMap {
-  const modules: RpcModuleMap = {};
-  for (const [key, loader] of Object.entries(globs)) {
-    if (!key.startsWith(base) || !key.endsWith(".server.ts")) continue;
-    modules[key.slice(base.length, -".server.ts".length)] = loader;
-  }
-  return modules;
-}
-
 export interface RpcHandlerOptions {
-  /** 路由 → 模块加载器（dev 由插件注入，prod 由 fromGlob 构造） */
+  /** 路由 → 模块加载器（dev 由插件注入，prod 由模块表虚拟模块提供） */
   modules: RpcModuleMap;
   /** URL 前缀，默认 "rpc"（端点形如 /rpc/actions/greet） */
   prefix?: string;
@@ -185,13 +160,14 @@ export function createRpcHandler(options: RpcHandlerOptions) {
 }
 
 // ==================== 服务器入口封装（createRpcServer） ====================
-// 用户项目里的显式服务器入口（如 server/index.ts）只需几行：
+// 默认形态：插件虚拟入口（fly-rpc:server）调用本函数，用户项目零服务器代码。
+// 逃生舱（高级用法）：自写服务器入口手动组装：
 //
 // ```ts
-// import { createRpcServer, fromGlob } from "fly-rpc/server";
+// import { createRpcServer } from "fly-rpc/server";
 // await createRpcServer({
 //   prefix: "rpc",
-//   modules: fromGlob(import.meta.glob("/src/**/*.server.ts")),
+//   modules: { "api/greet": () => import("./src/api/greet.server.ts") },
 // });
 // ```
 
@@ -259,7 +235,7 @@ function staticBackend(staticBase: URL) {
 }
 
 export interface RpcServerOptions {
-  /** 路由 → 模块加载器（生产用法：fromGlob(import.meta.glob("/src/**\/*.server.ts"))） */
+  /** 路由 → 模块加载器（默认形态由插件虚拟模块提供） */
   modules: RpcModuleMap;
   /** URL 前缀，默认 "rpc"（端点形如 /rpc/actions/greet） */
   prefix?: string;
@@ -278,10 +254,10 @@ export interface RpcServerOptions {
 /**
  * 创建并启动生产服务器（RPC + 静态资源 + SPA fallback + listhen 监听，单端口）。
  *
- * 用户项目里的显式入口（如 server/index.ts）调用本函数，全部内部逻辑（h3 app 组装、
- * 静态服务、history 路由 fallback、监听）由插件封装，入口只写配置。
+ * 默认形态：插件虚拟入口（fly-rpc:server）调用本函数，全部内部逻辑（h3 app 组装、
+ * 静态服务、history 路由 fallback、监听）由插件封装，用户项目零服务器代码。
  *
- * 构建：单个 vp build（插件 buildApp 钩子接管，入口经插件选项 serverEntry 传入）
+ * 构建：单个 vp build（插件 buildApp 钩子接管，虚拟入口为 SSR 构建 input）
  */
 export async function createRpcServer(options: RpcServerOptions) {
   const prefix = options.prefix ?? "rpc";
