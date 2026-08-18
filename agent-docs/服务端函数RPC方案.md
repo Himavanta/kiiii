@@ -80,30 +80,37 @@
 
 ### D5：上下文通过 `this` 注入（TS this 参数）
 
-- 服务端函数用 TS 的 this 参数声明上下文依赖，末尾用 **as 断言**剥除 this 参数（纯编译期操作，无任何运行时包装）：
+- 服务端函数用 TS 的 this 参数声明上下文依赖，**this 类型放宽为 `unknown`**（客户端自由调用
+  不报 TS2684，服务端 `fn.call(context)` 分发不变），函数内开头一次断言拿到 RpcContext：
 
 ```ts
-import type { RpcContext } from "@/framework/rpc";
+import type { RpcContext } from "kiiii/server";
 
-export default (function (this: RpcContext, name: string) {
-  this.signal.throwIfAborted();
-  this.user.id; // 中间件注入的数据
+export default async function (this: unknown, name: string): Promise<string> {
+  const ctx = this as RpcContext; // 函数内一次断言（集中一处）
+  ctx.signal.throwIfAborted();
   return `Hello ${name}`;
-} as (name: string) => Promise<string>);
+}
 ```
 
-- `this: RpcContext` 是**假参数**：不占参数位、调用方不可见、编译后消失。
-- **为什么需要 as 断言**：TS 规定带 this 参数的函数做自由调用（`greet("World")`）会报 TS2684（this 上下文 void 不可赋给 RpcContext）——函数体内要 this 的类型、调用方又不该传 this，TS 不允许同一签名同时满足两者。as 断言在类型层剥除 this 参数（编译期，运行时零痕迹），函数内部仍持有完整 `this: RpcContext` 类型。
-- 实现阶段明确：**不能用任何包装函数**（即使运行时恒等）——这是与用户达成的边界；`as FunctionType` 可接受。
+- `this` 参数是**假参数**：不占参数位、调用方不可见、编译后消失。
+- **为什么 this 用 unknown**：TS 规定带 this 参数的函数做自由调用（`greet("World")`）会报 TS2684
+  （this 上下文 void 不可赋给 RpcContext）——`unknown` 接受一切（void ✓ / context ✓），自由调用检查
+  直接放行，无需任何导出转换（无 as 目标、无类型辅助、无包装）。代价：客户端 hover 显示
+  `(this: unknown, name: string)`（无害），函数体内 this 的类型安全靠开头一次断言。
+- 演进记录：早期用 `as (name: string) => Promise<string>` 断言剥除 this（签名单源问题 → 讨论过
+  ServerFn 类型辅助 / define 恒等包装）——最终 this: unknown 方案**零转换**胜出（服务端无魔法、
+  客户端零声明、协议零变化）。
+- 实现阶段明确：**不能用任何包装函数**（即使运行时恒等）——这是与用户达成的边界。
 - 分发时注入：`await fn.call(context, ...args)`。
 - context 对象统一承载：`AbortSignal`、H3Event（request/headers/cookies）、中间件挂载的用户态等。
 - 红利：
   1. **省掉 AsyncLocalStorage**——rpc-master 用 231 行 `context.ts`（provideRequestContext/getRequestContext）在异步栈传递请求上下文，是因为它的 signal 占了第一个参数位、上下文没地方放；this 方案显式传入，不需要 ALS。
-  2. **中间件融合天然**——h3 middleware 往 context 挂 `user`，函数里 `this.user` 直接读，不需要 rpc-master 的 "locals bridge"。
-  3. 类型一致性不破坏：客户端看到的原文件签名中 this 参数不参与调用类型，stub 返回数据本身，行为与签名一致。
+  2. **中间件融合天然**——h3 middleware 往 context 挂 `user`，函数里 `ctx.user` 直接读，不需要 rpc-master 的 "locals bridge"。
+  3. 类型一致性不破坏：客户端自由调用直接可用（this: unknown 不参与调用类型），stub 返回数据本身，行为与签名一致。
 - 约束：
-  1. **必须 function 表达式**（箭头函数无自己的 this），lint 强制；
-  2. 每函数一行 `import type { RpcContext }`（可考虑全局类型声明）；
+  1. 必须 function 表达式（箭头函数无自己的 this），lint 强制；
+  2. 每函数一行 `import type { RpcContext }`；
   3. 服务端直调（SSR/测试）需 `fn.call(createContext(), ...)`，约定 context 工厂；
   4. `strict` 下不标注 this 会报错，正好强制显式声明上下文依赖。
 - 为什么 rpc-master 用不了：`createServerFunction` 包装层会吞掉 this，只能走"第一个参数 + ALS"路线；裸函数方案天然拥有这个自由度。
@@ -274,7 +281,7 @@ Body: stringify(args)   // 位置参数数组，与函数声明完全一致
 
 ## 附：讨论中的关键结论（备忘）
 
-- "上下文放 this"：TS 的 this 参数是假参数（不占位、编译后消失），`fn.call(context, ...args)` 注入即可；顺带省掉 AsyncLocalStorage 和中间件 locals 桥——rpc-master 用 231 行 + 一套 API 解决的问题，裸函数 + this 方案里不存在。
+- "上下文放 this"：TS 的 this 参数是假参数（不占位、编译后消失），`fn.call(context, ...args)` 注入即可；顺带省掉 AsyncLocalStorage 和中间件 locals 桥——rpc-master 用 231 行 + 一套 API 解决的问题，裸函数 + this 方案里不存在。最终形态：`this: unknown` + 函数内一次 `as RpcContext` 断言（零导出转换，客户端自由调用免 TS2684）。
 - "参数无格式限制"：位置参数 + 传输数组，函数声明与标准 TS 完全一致；默认/可选/rest/解构参数全部零成本工作，因为服务端执行的就是原函数本身。
 - "传输编码"：JSON 有类型谎言（Date→string 静默变形），devalue 的 stringify/parse 保真全部内置复杂类型且显式报错——"怎么声明怎么调用、类型与运行时一致"的完整答案。
 - "错误协议"：两类失败分开——协议错误走状态码，业务错误走 RpcError 信封（stub reject 保持 try/catch 与本地调用一致）；普通 throw 的意外错误不跨网络；与 rpc-master 的分歧在于业务错误生产也传（产品的一部分），而非按环境区分。
@@ -288,7 +295,7 @@ Body: stringify(args)   // 位置参数数组，与函数声明完全一致
 3. **dev 模块双实例使 instanceof 失效**：plugin（配置加载链）与 .server.ts（ssrLoadModule 链）各加载一份 server.ts，RpcError instanceof 跨实例为 false → 业务错误误入意外错误分支。用 name 品牌判断（`isRpcError`）解决。
 4. **h3 2.0 的运行时上下文结构**：`event.node` 已弃用，改为 `event.runtime?.node?.res`（res 可为 undefined，需要判空）。
 5. **devalue 格式不是 JSON**：`stringify(["x"])` 输出 `[[1],"x"]` 而非 `["x"]`——curl 手测必须用 devalue 编码的 body，普通 JSON 会 400（行为正确）。
-6. **d5 的 as 断言可行**：`(async function (this: RpcContext, ...) {...}) as (name: string) => Promise<string>`——TS 允许（函数类型兼容性中 this 参数在目标无标注时被忽略），函数内部 this 类型完整。
+6. **d5 的类型方案演进**：as 断言剥 this（`as (name: string) => Promise<string>`，签名重复）→ ServerFn 类型辅助（签名单源，两行）→ define 恒等包装（一行，被"无运行时包装"红线否决）→ **`this: unknown` + 函数内一次断言**（零转换、客户端自由调用免 TS2684、hover 显示 this: unknown 无害）——最终采纳。
 7. **h3 2.0 deprecated API 清理（LSP/类型核对驱动）**：`createApp` → `new H3()`；`createError` → `new HTTPError(...)`；`setResponseStatus` → 直接依赖默认 200（删除调用）；`toNodeListener` → `h3/node` 的 `toNodeHandler`（主包导出的 toNodeHandler 也已弃用）；`readRawBody` → `event.req.text()`（标准 Request 读取，无 body 时返回空串而非 undefined，`if (raw)` 判断兼容）。注意：**HTTPError 从 `h3/node` 导入**——主包（index.d.mts）类型声明漏导出了 HTTPError（RC 缺口，运行时存在、类型缺失）；`HTTPError.isError` 按 constructor name 判断、跨上下文安全（与 isRpcError 同思路，可直接用于 parse 错误分支）。
 
 - "AST 提取不是必需"——两个参考库都证明运行时加载 + 遍历即可，AST 只服务于"构建时静态生成代码"这一特定需求。
