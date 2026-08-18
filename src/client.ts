@@ -1,14 +1,9 @@
 import { parse, stringify } from "devalue";
 import { isFunction, isObject, isString } from "./guards.ts";
+import { isRpcError, RpcError } from "./shared.ts";
 
-/**
- * RPC 调用错误：业务错误（服务端 RpcError）跨网络还原后的形态。
- * 客户端用 `catch (e) { if (e.code === "...") }` 分支业务错误。
- */
-export interface RpcCallError extends Error {
-  code?: string;
-  data?: unknown;
-}
+// client 子路径重新导出错误协议：客户端判断还原错误（isRpcError / RpcError.code）
+export { isRpcError, RpcError };
 
 /** 内部标记：挂在返回的 Promise 上，供 rpcCancel() 取出 AbortController */
 const CANCEL_KEY = Symbol("kiiii.cancel");
@@ -63,10 +58,7 @@ export function rpcCall(
       }
       const value: unknown = parse(await response.text());
       if (isErrorEnvelope(value)) {
-        const error: RpcCallError = new Error(value.message);
-        error.name = "RpcError";
-        error.code = value.code;
-        error.data = value.data;
+        const error = new RpcError(value.message, value.code, value.data);
         throw error;
       }
       return value;

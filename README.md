@@ -18,7 +18,8 @@ export default defineConfig({
 
 ```ts
 // src/api/greet.server.ts —— 服务端函数（文件即函数，默认导出）
-import { RpcError } from "kiiii";
+import { RpcError } from "kiiii/shared"; // 错误协议（两端共用）
+import type { RpcContext } from "kiiii/server";
 
 export default async function greet(name: string): Promise<string> {
   if (!name) throw new RpcError("名字不能为空", "EMPTY_NAME");

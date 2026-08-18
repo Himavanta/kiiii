@@ -6,28 +6,14 @@ import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parse, stringify } from "devalue";
-import { isError, isFunction } from "./guards.ts";
+import { isFunction } from "./guards.ts";
 
-// server 子路径导出：模块表组装与路由哈希（生成代码 import "kiiii/server" 使用）
+// server 子路径导出：模块表组装与路由哈希（生成代码 import "kiiii/server" 使用），
+// 以及错误协议（公共概念，主来源 kiiii/shared）
 export { buildModuleMap } from "./modules.ts";
 export { routeHash } from "./hash.ts";
-
-/**
- * 业务错误：显式抛出后其 message/code/data 会跨网络到达客户端
- * （200 + 错误信封，客户端 stub 检测后 reject 同构的 Error）
- * 普通 throw 的 Error 属于意外错误，生产环境不泄漏任何细节。
- */
-export class RpcError extends Error {
-  code?: string;
-  data?: unknown;
-
-  constructor(message: string, code?: string, data?: unknown) {
-    super(message);
-    this.name = "RpcError";
-    this.code = code;
-    this.data = data;
-  }
-}
+import { isRpcError, RpcError } from "./shared.ts";
+export { isRpcError, RpcError };
 
 /**
  * 服务端函数上下文：由分发器通过 `fn.call(context, ...args)` 注入，函数内用 `this` 读取。
@@ -37,15 +23,6 @@ export interface RpcContext {
   signal: AbortSignal;
   /** h3 原始事件：可访问 request / headers / cookies 等 */
   event: H3Event;
-}
-
-/**
- * 判断一个错误是否为 RpcError。
- * 用 name 品牌判断而非 instanceof：dev 下插件链（配置加载）与 .server.ts 链
- * （ssrLoadModule）会各自加载一份 server.ts，instanceof 跨模块实例会失效。
- */
-export function isRpcError(error: unknown): error is RpcError {
-  return isError(error) && error.name === "RpcError";
 }
 
 /** 路由 → 模块加载器。路由 = 相对项目 root 的路径（去 pattern 静态前缀与文件后缀），如 "api/greet" */
