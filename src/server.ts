@@ -114,6 +114,8 @@ export function createKiiiiHandler(options: KiiiiHandlerOptions) {
       const result = await fn.call(context, ...args);
       return stringify(result);
     } catch (error) {
+      // 取消 / 超时导致的提前退出是预期行为：静默（连接已断开，无需响应、不记日志）
+      if (error instanceof Error && error.name === "AbortError") return;
       if (isKiiiiError(error)) {
         // 业务错误：开发者显式声明的错误，message/code/data 是产品的一部分（生产也传），走 200 + 信封
         return stringify({
