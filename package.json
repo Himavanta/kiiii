@@ -1,7 +1,23 @@
 {
   "name": "kiiii",
   "version": "0.0.0",
-  "description": "A starter for creating a TypeScript package.",
+  "description": "Server actions for Vite: write functions in any file and call them directly from the client - type-safe (types from original signatures), devalue serialization, dev/prod consistent",
+  "keywords": [
+    "api",
+    "backend",
+    "devalue",
+    "full-stack",
+    "functions",
+    "h3",
+    "remote-procedure-call",
+    "rpc",
+    "server-actions",
+    "server-functions",
+    "type-safe",
+    "typescript",
+    "vite",
+    "vite-plugin"
+  ],
   "homepage": "https://github.com/Himavanta/kiiii#readme",
   "bugs": {
     "url": "https://github.com/Himavanta/kiiii/issues"
