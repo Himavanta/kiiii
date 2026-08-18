@@ -56,6 +56,33 @@ export function kiiii(options?: KiiiiOptions): Plugin {
   const bundleDeps = options?.bundleDeps ?? true;
   let root = "";
   let isServerModule: ((id: string) => boolean) | null = null;
+  // dev：缓存的请求 handler——文件增删时置空重建，稳态请求零转换零分配
+  let devHandler: ReturnType<typeof toNodeHandler> | null = null;
+
+  /** dev 请求处理：复用缓存的 handler；仅首次 / 文件增删后重建（重载模块表 + 新建 h3 app） */
+  const handleDevRequest = async (
+    server: ViteDevServer,
+    prefix: string,
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> => {
+    try {
+      if (!devHandler) {
+        const cached = server.moduleGraph.getModuleById(MODULES_ID);
+        if (cached) server.moduleGraph.invalidateModule(cached);
+        const mod = await server.ssrLoadModule(MODULES_MODULE);
+        const modules = mod.default as KiiiiModuleMap;
+        const app = new H3();
+        app.use(createKiiiiHandler({ modules, prefix, isDev: true }));
+        devHandler = toNodeHandler(app);
+      }
+      await devHandler(req, res);
+    } catch (error) {
+      console.error("[kiiii] dev handler 错误:", error);
+      res.statusCode = 500;
+      res.end("Internal Server Error");
+    }
+  };
 
   return {
     name: "kiiii",
@@ -147,6 +174,15 @@ export function kiiii(options?: KiiiiOptions): Plugin {
     },
 
     configureServer(server) {
+      // 文件增删（glob 匹配结果变化）→ 丢弃缓存的 dev handler（下次请求重建）；
+      // 内容修改由 Vite 自动失效对应模块，模块表无需重建
+      const onFsChange = (file: string) => {
+        const normalized = normalizedPath(file, root);
+        if (normalized && isServerModule?.(normalized)) devHandler = null;
+      };
+      server.watcher.on("add", onFsChange);
+      server.watcher.on("unlink", onFsChange);
+
       // dev：h3 handler 挂到 Vite 中间件。手动匹配前缀（connect 的 use(path) 会改写 req.url 破坏路由）
       server.middlewares.use((req, res, next) => {
         const url = req.url ?? "";
@@ -160,26 +196,13 @@ export function kiiii(options?: KiiiiOptions): Plugin {
   };
 }
 
-/** dev 请求处理：重载模块表（新增文件即用）+ ssrLoadModule + h3 分发 */
-async function handleDevRequest(
-  server: ViteDevServer,
-  prefix: string,
-  req: IncomingMessage,
-  res: ServerResponse,
-): Promise<void> {
-  try {
-    const cached = server.moduleGraph.getModuleById(MODULES_ID);
-    if (cached) server.moduleGraph.invalidateModule(cached);
-    const mod = await server.ssrLoadModule(MODULES_MODULE);
-    const modules = mod.default as KiiiiModuleMap;
-    const app = new H3();
-    app.use(createKiiiiHandler({ modules, prefix, isDev: true }));
-    toNodeHandler(app)(req, res);
-  } catch (error) {
-    console.error("[kiiii] dev handler 错误:", error);
-    res.statusCode = 500;
-    res.end("Internal Server Error");
-  }
+/**
+ * 相对 root 的归一化路径（/ 开头、反斜杠转正斜杠）；root 之外返回 null。
+ */
+function normalizedPath(id: string, root: string): string | null {
+  const rel = relative(root, id);
+  if (rel.startsWith("..") || isAbsolute(rel)) return null;
+  return "/" + rel.replaceAll("\\", "/");
 }
 
 /**
@@ -187,10 +210,8 @@ async function handleDevRequest(
  * 不在 pattern 内的路径返回 null（不拦截）。
  */
 function toRoute(id: string, root: string, isServerModule: (id: string) => boolean): string | null {
-  const rel = relative(root, id);
-  if (rel.startsWith("..") || isAbsolute(rel)) return null;
-  const normalized = "/" + rel.replaceAll("\\", "/");
-  if (!isServerModule(normalized)) return null;
+  const normalized = normalizedPath(id, root);
+  if (!normalized || !isServerModule(normalized)) return null;
   return routeHash(normalized);
 }
 /**

@@ -2,15 +2,15 @@
   "name": "kiiii",
   "version": "0.0.0",
   "description": "A starter for creating a TypeScript package.",
-  "homepage": "https://github.com/author/library#readme",
+  "homepage": "https://github.com/Himavanta/kiiii#readme",
   "bugs": {
-    "url": "https://github.com/author/library/issues"
+    "url": "https://github.com/Himavanta/kiiii/issues"
   },
   "license": "MIT",
-  "author": "Author Name <author.name@mail.com>",
+  "author": "Himavanta@foxmail.com",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/author/library.git"
+    "url": "git+https://github.com/Himavanta/kiiii.git"
   },
   "files": [
     "dist"
@@ -37,8 +37,7 @@
   "dependencies": {
     "devalue": "^5.9.0",
     "h3": "2.0.1-rc.26",
-    "listhen": "^1.10.1",
-    "srvx": "^0.12.5"
+    "listhen": "^1.10.1"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",

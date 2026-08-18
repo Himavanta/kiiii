@@ -225,9 +225,6 @@ importers:
       listhen:
         specifier: ^1.10.1
         version: 1.10.1(srvx@0.12.5)
-      srvx:
-        specifier: ^0.12.5
-        version: 0.12.5
       vite:
         specifier: npm:@voidzero-dev/vite-plus-core@0.2.9
         version: '@voidzero-dev/vite-plus-core@0.2.9(@types/node@26.2.0)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0)'
