@@ -1,12 +1,12 @@
 # kiiii
 
-kiiii is a Vite plugin that turns server-side functions into directly callable client-side proxies. You write functions in `*.server.ts` files and import them from client code — the plugin rewrites those imports into fetch calls at build time. Types come from the original file signatures, so no extra type definitions are needed.
+kiiii is a Vite plugin that turns server-side functions into directly callable client-side proxies. You write functions in files (conventionally `*.server.ts`) and import them from client code — the plugin rewrites those imports into fetch calls at build time. Types come from the original file signatures, so no extra type definitions are needed.
 
-kiiii 是一个 Vite 插件，把服务端函数变成客户端可直接调用的代理。函数写在 `*.server.ts` 文件里，客户端直接 import 调用——插件在构建时把 import 改写为 fetch 调用。类型来自原文件签名，无需额外类型定义。
+kiiii 是一个 Vite 插件，把服务端函数变成客户端可直接调用的代理。函数写在普通文件里（惯例为 `*.server.ts`），客户端直接 import 调用——插件在构建时把 import 改写为 fetch 调用。类型来自原文件签名，无需额外类型定义。
 
-Built on h3 2.0 and Vite. Dev and production share the same protocol: devalue serialization, `KiiiiError` business-error envelopes, cancellation, and timeouts.
+Built on [h3](https://h3.unjs.io/) 2.0 and Vite. Dev and production share the same protocol: [devalue](https://github.com/Rich-Harris/devalue) serialization, `KiiiiError` business-error envelopes, cancellation, and timeouts.
 
-基于 h3 2.0 + Vite。dev 与生产共用同一协议：devalue 序列化、`KiiiiError` 业务错误信封、取消、超时。
+基于 [h3](https://h3.unjs.io/) 2.0 + Vite。dev 与生产共用同一协议：[devalue](https://github.com/Rich-Harris/devalue) 序列化、`KiiiiError` 业务错误信封、取消、超时。
 
 ## Quick Start / 快速开始
 
@@ -15,6 +15,10 @@ Built on h3 2.0 and Vite. Dev and production share the same protocol: devalue se
 ```bash
 npm install kiiii
 ```
+
+kiiii requires Vite as a peer dependency.
+
+kiiii 以 Vite 为 peer 依赖。
 
 ### 2. Configure the plugin / 配置插件
 
@@ -27,9 +31,9 @@ export default defineConfig({
 });
 ```
 
-The `pattern` option is required. It decides which files are server modules: client imports that match the pattern are rewritten into remote calls.
+The `pattern` option is required. It decides which files are server modules: client imports that match the pattern are rewritten into remote calls. File names are completely free — the pattern is the only constraint (`.server.ts` below is just a convention).
 
-`pattern` 选项必填。它决定哪些文件是服务器模块：客户端 import 命中 pattern 的文件会被改写为远程调用。
+`pattern` 选项必填。它决定哪些文件是服务器模块：客户端 import 命中 pattern 的文件会被改写为远程调用。文件名完全自由——pattern 是唯一约束（下文 `.server.ts` 只是惯例）。
 
 ### 3. Write a server function / 写服务端函数
 
@@ -43,11 +47,11 @@ export default async function greet(name: string): Promise<string> {
 }
 ```
 
-- The file name ends with `.server.ts`.
+- The file matches the configured `pattern`.
 - The function is a default export and must be async.
 - Arguments and return values must be serializable (devalue). See [Serialization / 序列化](#serialization--序列化).
 
-- 文件名以 `.server.ts` 结尾。
+- 文件命中配置的 `pattern`。
 - 函数为默认导出，且必须为 async。
 - 参数与返回值必须可序列化（devalue）。见 [Serialization / 序列化](#serialization--序列化)。
 
@@ -96,9 +100,13 @@ The `this: unknown` signature keeps client-side calls free of type errors — a 
 
 `this: unknown` 的签名让客户端普通调用不报类型错误——严格的 this 类型会使 TS 拒绝 `greet("World")` 这样的调用。函数内的一次断言恢复完整的上下文类型；除此之外函数体与普通函数无异。
 
-The signal fires when the connection drops, the client times out, or the client actively cancels. Call `throwIfAborted()` at safe points to exit early.
+The signal fires when the connection drops, the client times out, or the client actively cancels. Cancellation is cooperative: call `throwIfAborted()` at safe points to exit early — a function that never checks the signal cannot be interrupted.
 
-信号在连接断开、客户端超时或客户端主动取消时触发。在安全点调用 `throwIfAborted()` 即可提前退出。
+信号在连接断开、客户端超时或客户端主动取消时触发。取消是协作式的：在安全点调用 `throwIfAborted()` 提前退出——从不检查信号的函数无法被中断。
+
+The `event` field is the raw [h3 event](https://h3.unjs.io/guide/event) — access request, headers, and cookies through it. Refer to the h3 docs for the full API.
+
+`event` 字段是原始 [h3 事件](https://h3.unjs.io/guide/event)——通过它访问 request、headers、cookies。完整 API 见 h3 文档。
 
 ## Serialization / 序列化
 
@@ -120,18 +128,22 @@ The trade-offs: the payload is not standard JSON (Content-Type is `text/plain`),
 
 代价：报文不是标准 JSON（Content-Type 为 `text/plain`），且只允许 devalue 可序列化的值——函数与未注册的类实例在发送端显式抛错。
 
+[devalue](https://github.com/Rich-Harris/devalue) is maintained by the Svelte team and used in production by SvelteKit. Custom class instances need a reducer/reviver registered on both ends; serialization is slightly slower than JSON (imperceptible for small payloads).
+
+[devalue](https://github.com/Rich-Harris/devalue) 由 Svelte 团队维护，SvelteKit 生产环境在用。自定义类实例需要在两端登记 reducer/reviver；序列化性能略低于 JSON（小数据无感）。
+
 ## Package Entries / 入口约定
 
-| Entry / 入口   | Contents / 内容                                                          | Used by / 使用方                     |
-| -------------- | ------------------------------------------------------------------------ | ------------------------------------ |
-| `kiiii`        | Vite plugin — `kiiii`, `KiiiiOptions`                                    | `vite.config.ts`                     |
-|                | Vite 插件——`kiiii`、`KiiiiOptions`                                       | `vite.config.ts`                     |
-| `kiiii/server` | `KiiiiContext`, `createKiiiiServer`, `buildModuleMap`, `routeHash`       | `.server.ts` files, generated code   |
-|                | `KiiiiContext`、`createKiiiiServer`、`buildModuleMap`、`routeHash`       | `.server.ts` 文件、生成代码          |
-| `kiiii/client` | `invoke`, `cancel`                                                       | Generated stubs, manual cancellation |
-|                | `invoke`、`cancel`                                                       | 生成 stub、手动取消                  |
-| `kiiii/error`  | `KiiiiError`, `isKiiiiError` — cross-end public entry, zero dependencies | Any module                           |
-|                | `KiiiiError`、`isKiiiiError`——跨端公共入口，零依赖                       | 任何模块                             |
+| Entry / 入口   | Contents / 内容                                                          | Used by / 使用方                      |
+| -------------- | ------------------------------------------------------------------------ | ------------------------------------- |
+| `kiiii`        | Vite plugin — `kiiii`, `KiiiiOptions`                                    | `vite.config.ts`                      |
+|                | Vite 插件——`kiiii`、`KiiiiOptions`                                       | `vite.config.ts`                      |
+| `kiiii/server` | `KiiiiContext`, `createKiiiiServer`, `buildModuleMap`, `routeHash`       | Server function files, generated code |
+|                | `KiiiiContext`、`createKiiiiServer`、`buildModuleMap`、`routeHash`       | 服务器函数文件、生成代码              |
+| `kiiii/client` | `invoke`, `cancel`                                                       | Generated stubs, manual cancellation  |
+|                | `invoke`、`cancel`                                                       | 生成 stub、手动取消                   |
+| `kiiii/error`  | `KiiiiError`, `isKiiiiError` — cross-end public entry, zero dependencies | Any module                            |
+|                | `KiiiiError`、`isKiiiiError`——跨端公共入口，零依赖                       | 任何模块                              |
 
 ## Options / 选项
 
@@ -159,15 +171,19 @@ The trade-offs: the payload is not standard JSON (Content-Type is `text/plain`),
 
   服务器产物是否打包全部依赖（自包含部署）。默认为 `true`。为 `false` 时依赖保持 external——运行时从 `node_modules` 解析。
 
+  Bundling makes the output self-contained at the cost of size (the h3/listhen runtime is included). External mode keeps the output small but requires installing `dependencies` on the deployment host.
+
+  打包让产物自包含，代价是体积（h3/listhen 运行时全量打入）。external 模式产物更小，但部署环境需安装 `dependencies`。
+
 ## Features / 特性
 
-- The `pattern` option is the single source of truth — no suffix or directory derivation. Matching is delegated to glob, and the route is a hash of the full path: anonymous, stable, and absolutely correct (different paths never collide).
+- The `pattern` option is the single source of truth — no suffix or directory derivation. Matching is delegated to glob, and the route is a hash of the full path: anonymous, stable, and absolutely correct (different paths never collide). The trade-off: endpoints look like `/kiiii/{hash}` in the network tab.
 - Dev and production share the same code path — the same virtual module (`import.meta.glob`), transformed at runtime in dev (no directory scanning; new files work immediately) and expanded into lazy chunks at build time in production.
 - No server entry file: the production server entry is generated by the plugin (h3: remote calls + static assets + SPA fallback + listhen, single port). One `vp build` produces both server and client environments.
 - Self-contained deployment: dependencies are bundled into the server output by default (`bundleDeps: false` switches to external).
 - Business-error protocol: `KiiiiError` is restored across the network (200 + envelope); unexpected errors never leak.
 
-- `pattern` 是唯一事实来源——不做后缀/目录推导。匹配交给 glob，路由 = 完整路径哈希：匿名、稳定、绝对正确（不同路径必然不同哈希）。
+- `pattern` 是唯一事实来源——不做后缀/目录推导。匹配交给 glob，路由 = 完整路径哈希：匿名、稳定、绝对正确（不同路径必然不同哈希）。代价：network tab 里的端点形如 `/kiiii/{hash}`，不可读。
 - dev 与生产共用同一份代码——同一虚拟模块（`import.meta.glob`），dev 下运行时转换（无目录扫描；新增文件即用），生产构建期展开为 lazy chunks。
 - 无服务器入口文件：生产服务器入口由插件生成（h3：远程调用 + 静态资源 + SPA fallback + listhen，单端口）。一个 `vp build` 完成服务器 + 客户端两个环境。
 - 自包含部署：依赖默认全量打包进服务器产物（`bundleDeps: false` 切换为 external）。
