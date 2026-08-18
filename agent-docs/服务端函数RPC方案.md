@@ -128,8 +128,10 @@ export default (function (this: RpcContext, name: string) {
 
 ```
 Vite 插件 src/rpc/plugin.ts（vite.config.ts 注册，约 120 行）
-  ├─ config 钩子：客户端 outDir → {outDir}/clients（服务器产物在打包根 dist）；
-  │     SSR 构建（服务器，CLI --ssr）跳过 outDir 修改并关掉 public 拷贝
+  ├─ config 钩子：build 时声明 SSR 入口（build.ssr = serverEntry 选项），
+  │     Vite 标准流程据此注入完整的服务器环境（node 解析、依赖外部化）；dev 不受影响
+  ├─ buildApp 钩子：一个 vp build 完成两个环境——先服务器（→ 打包根 dist），
+  │     再重定向客户端 outDir → {打包根}/clients 并构建
   ├─ resolveId(source, importer, options)
   │     source 以 .server.ts 结尾 && !options.ssr → 返回虚拟 id
   ├─ load(id)
@@ -145,7 +147,7 @@ runtime src/rpc/server.ts（dev/prod 共用）
 
 显式服务器入口 server/index.ts（用户项目，内容极少）
   ├─ createRpcServer({ modules: fromGlob(import.meta.glob("/src/**/*.server.ts")) })
-  └─ 构建命令：vp build --ssr server/index.ts --outDir dist（先服务器，后客户端）
+  └─ 构建：单个 vp build（入口经插件选项 serverEntry 传入，不暴露打包参数）
 ```
 
 ### 4.2 dev 接线
@@ -168,9 +170,13 @@ runtime src/rpc/server.ts（dev/prod 共用）
   2. 静态资源：h3 `serveStatic` + fs 后端（getMeta 用 fs.stat 提供 type/size/mtime/弱 etag，getContents 读文件）——etag/304/Last-Modified 已验证；目录为固定约定 `{项目根}/dist/clients`（服务器入口在打包根 dist，从项目根启动时 ./clients 即客户端产物；需自定义时传 staticDir 绝对路径或 file: URL）
   3. SPA fallback：静态未命中 → 读 index.html 返回（history 路由）
   4. 监听：listhen（PORT 环境变量可配，默认 3000）——必须传 `toNodeHandler(app)`（h3 对象的 handler 是事件形态，直接传 app 会挂起）
-- **构建**：`pnpm build` = `tsc && vp build --ssr server/index.ts --outDir dist && vp build`——**先服务器后客户端**：服务器构建清空 dist 根写入 index.js + assets/，客户端构建（outDir 被插件重定向到 dist/clients）只清空自己的目录；产物 dist/index.js + dist/assets/* + dist/clients/*，无嵌套构建、无 emptyOutDir 冲突
+- **构建**：`pnpm build` = `tsc && vp build`——插件 buildApp 钩子接管，单个命令完成两个环境：
+  先服务器（SSR 打包 serverEntry → 打包根，清空 dist 根），后客户端（outDir 重定向到
+  dist/clients，只清空自己的目录）；产物 dist/index.js + dist/assets/* + dist/clients/*，
+  无嵌套构建、无 emptyOutDir 冲突、无打包参数暴露（入口由插件选项 serverEntry 传入，
+  默认 "server/index.ts"）
 - **运行**：`node dist/index.js`（PORT 环境变量可配，默认 3000）
-- **插件不参与服务器构建编排**（设计结论：嵌套构建需要防递归等机制，为省一个命令引入不稳定不值）：服务器构建由用户脚本显式执行，入口文件的 glob pattern 与客户端插件选项（scanRoot）各自显式、互相独立，改 scanRoot 需同步两处
+- **构建编排的取舍**：早期尝试过嵌套构建自动合成（环境变量防递归等机制），为省一个命令引入不稳定不值，已否决；最终形态是插件 buildApp 钩子接管 vite-plus builder 的双环境构建（config 钩子声明 SSR 入口让 Vite 标准流程生成服务器环境，buildApp 钩子只做 outDir 重定向与顺序构建）——入口文件的 glob pattern 与客户端插件选项（scanRoot）各自显式、互相独立，改 scanRoot 需同步两处
 - **静态服务不需要单独部署**：RPC 与静态资源在同一 app、同一端口；若将来静态资源要上 CDN/nginx，只需把 RPC 前缀保留在服务器、静态交 CDN，无需改代码
 - **etag 细节**：serveStatic 只在 getMeta 提供 etag 字段时才处理 If-None-Match（弱 etag：`W/"{size}-{mtimeMs}"`），否则只有 Last-Modified
 

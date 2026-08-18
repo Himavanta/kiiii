@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vp dev",
-    "build": "tsc && vp build --ssr server/index.ts --outDir dist && vp build",
+    "build": "tsc && vp build",
     "start": "node dist/index.js",
     "preview": "vp preview",
     "prepare": "vp config"

@@ -18,6 +18,8 @@ export interface RpcPluginOptions {
   timeout?: number;
   /** 服务端函数扫描根目录（相对项目 root），默认 "src" */
   scanRoot?: string;
+  /** 服务器入口（相对项目 root），默认 "server/index.ts" */
+  serverEntry?: string;
 }
 
 /**
@@ -26,31 +28,67 @@ export interface RpcPluginOptions {
  * - 客户端构建：resolveId 拦截 *.server.ts 导入 → 虚拟 stub 模块（load 生成 fetch 调用）；
  *   服务端原文件保持不动（SSR 解析不拦截，dev 由 ssrLoadModule 加载）
  * - dev 模式：h3 RPC handler 挂到 Vite 中间件，每次请求扫描 + ssrLoadModule（HMR 失效）
- * - 构建模式：config 钩子把客户端 outDir 重定向到 {outDir}/client；服务器不参与构建编排——
- *   入口由用户在项目里显式编写（见 createRpcServer），单独构建：
- *   `vp build --ssr server/index.ts --outDir dist/server`
+ * - 构建模式：一个 vp build 完成两个环境——config 钩子声明 SSR 入口（build.ssr，
+ *   由 Vite 标准流程生成服务器环境），buildApp 钩子先构建服务器（→ 打包根），
+ *   再重定向客户端 outDir 到 {打包根}/clients 构建
  */
 export function rpc(options: RpcPluginOptions = {}): Plugin {
   const prefix = options.prefix ?? "rpc";
   const timeout = options.timeout ?? 30_000;
   const scanRootOption = options.scanRoot ?? "src";
+  const serverEntry = options.serverEntry ?? "server/index.ts";
   let scanRoot = "";
 
   return {
     name: "fly-rpc",
     enforce: "pre",
 
-    config(userConfig) {
-      // 服务器构建（--ssr）：outDir 已由 CLI 显式传入（dist 根），不再重定向；
-      // public/ 属于客户端，服务器构建不拷贝
-      if (userConfig.build?.ssr) return { build: { copyPublicDir: false } };
-      // 客户端产物 → {outDir}/clients（服务器产物在打包根 dist：index.js + assets/）
-      const outDir = (userConfig.build?.outDir as string | undefined) ?? "dist";
-      return { build: { outDir: join(outDir, "clients") } };
-    },
-
     configResolved(resolved: ResolvedConfig) {
       scanRoot = join(resolved.root, scanRootOption);
+    },
+
+    /**
+     * 构建时声明 SSR 入口：Vite 标准流程（resolveConfig）自动注入完整的服务器环境
+     * （node 解析条件、依赖外部化等），无需手动拼装。dev 模式不受影响。
+     */
+    config(_userConfig, env) {
+      if (env.command !== "build") return;
+      return {
+        build: {
+          ssr: serverEntry, // 字符串入口（相对 root）
+          copyPublicDir: false, // public 属于客户端
+        },
+      };
+    },
+
+    /**
+     * 接管构建（vite-plus/vite builder 的 buildApp 钩子）：一个 vp build 完成两个环境。
+     * 先服务器（SSR 打包 serverEntry → 打包根），后客户端（→ {打包根}/clients）。
+     * 所有打包参数都在插件内确定，不暴露给用户。
+     */
+    async buildApp(builder) {
+      const { config } = builder;
+      // 打包根（build.outDir 已 resolve 为绝对路径）：服务器产物在其根，客户端在其 {outDir}/clients
+      const outDir = config.build.outDir;
+      // 重定向客户端 outDir 并恢复 public 拷贝（config 钩子的 copyPublicDir: false 会被继承）
+      config.environments["client"] = {
+        ...config.environments.client,
+        build: {
+          ...config.environments.client.build,
+          ssr: false, // 覆盖继承自顶层 build.ssr 的服务器入口
+          outDir: join(outDir, "clients"),
+          copyPublicDir: true,
+        },
+      };
+
+      // 1. 服务器环境：legacy builder 已按 config.build.ssr 自动 setup
+      await builder.build(builder.environments["ssr"]);
+
+      // 2. 客户端环境 → {打包根}/clients
+      const clientEnv = await config.build.createEnvironment("client", config);
+      await clientEnv.init();
+      builder.environments["client"] = clientEnv;
+      await builder.build(clientEnv);
     },
 
     async resolveId(source, importer, resolveOptions) {

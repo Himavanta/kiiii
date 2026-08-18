@@ -281,7 +281,7 @@ export interface RpcServerOptions {
  * 用户项目里的显式入口（如 server/index.ts）调用本函数，全部内部逻辑（h3 app 组装、
  * 静态服务、history 路由 fallback、监听）由插件封装，入口只写配置。
  *
- * 构建命令（与客户端构建并列）：`vp build --ssr server/index.ts --outDir dist/server`
+ * 构建：单个 vp build（插件 buildApp 钩子接管，入口经插件选项 serverEntry 传入）
  */
 export async function createRpcServer(options: RpcServerOptions) {
   const prefix = options.prefix ?? "rpc";

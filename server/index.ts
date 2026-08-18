@@ -7,8 +7,9 @@ import { createRpcServer, fromGlob } from "../src/rpc/server";
 // - 静态资源：默认约定 {项目根}/dist/clients（从项目根启动 node dist/index.js）
 // - SPA fallback + listhen 监听（PORT 环境变量可配，默认 3000）
 //
-// 构建命令（先服务器后客户端，产物：dist/index.js + dist/assets/* + dist/clients/*）：
-//   vp build --ssr server/index.ts --outDir dist && vp build
+// 构建：单个 vp build 完成服务器 + 客户端两个环境（入口经插件选项 serverEntry 传入，
+// 产物：dist/index.js + dist/assets/* + dist/clients/*）：
+//   pnpm build
 await createRpcServer({
   prefix: "rpc",
   // 泛型显式声明模块形状（vite/client 的 Overload 2），返回类型与 fromGlob 参数直接匹配
