@@ -4,12 +4,21 @@ export default defineConfig({
   staged: {
     "*": "vp check --fix",
   },
-  pack: {
-    entry: ["src/index.ts", "src/client.ts", "src/server.ts"],
-    dts: true,
-    exports: true,
-    platform: "neutral",
-  },
+  pack: [
+    {
+      entry: ["src/index.ts", "src/server.ts"],
+      dts: true,
+      exports: true,
+      platform: "node",
+      fixedExtension: false,
+    },
+    {
+      entry: "src/client.ts",
+      dts: true,
+      exports: true,
+      platform: "neutral",
+    },
+  ],
   lint: {
     options: {
       typeAware: true,
