@@ -7,7 +7,7 @@ import { H3 } from "h3";
 import { toNodeHandler } from "h3/node";
 import { createRpcHandler } from "./server";
 import type { RpcModuleMap } from "./server";
-import { routeHash } from "./hash";
+import { routeName } from "./hash";
 
 /** 虚拟模块前缀：服务器入口/模块表/客户端 stub 统一走 \0fly-rpc:* */
 const VIRTUAL_PREFIX = "\0fly-rpc:";
@@ -24,7 +24,7 @@ export interface RpcPluginOptions {
    * 客户端 import 命中 pattern 的文件会被替换为 RPC 调用，注意勿包含普通模块
    */
   pattern?: string;
-  /** URL 前缀，默认 "rpc"（端点形如 /rpc/{routeHash}） */
+  /** URL 前缀，默认 "rpc"（端点形如 /rpc/{文件名}-{hash}） */
   prefix?: string;
   /** 客户端调用超时（毫秒），0 关闭，默认 30_000 */
   timeout?: number;
@@ -33,7 +33,8 @@ export interface RpcPluginOptions {
 /**
  * fly-rpc Vite 插件。
  *
- * - pattern 是唯一事实来源（不做后缀/目录推导）：route = routeHash(相对 root 的完整路径)，
+ * - pattern 是唯一事实来源（不做后缀/目录推导）：route = routeName(相对 root 的完整路径)
+ *   （文件名-hash，如 data.server.ts → greet-xxxxx），
  *   三个消费端各自使用同一 pattern 匹配与同一 route 算法：
  *   - dev：ssrLoadModule(模块表虚拟模块)——import.meta.glob 在 dev 下由 Vite 转换，
  *     无需目录扫描；每次请求 invalidate 后重载（新增 .server.ts 文件即用）
@@ -182,7 +183,7 @@ async function handleDevRpc(
 }
 
 /**
- * 计算路由：相对项目 root 的完整路径的哈希（与生产模块表生成代码同一算法）。
+ * 计算路由：文件名-hash（与生产模块表生成代码同一算法）。
  * 不在 pattern 内的路径返回 null（不拦截）。
  */
 function toRoute(id: string, root: string, isServerModule: (id: string) => boolean): string | null {
@@ -190,7 +191,7 @@ function toRoute(id: string, root: string, isServerModule: (id: string) => boole
   if (rel.startsWith("..") || isAbsolute(rel)) return null;
   const normalized = "/" + rel.replaceAll("\\", "/");
   if (!isServerModule(normalized)) return null;
-  return routeHash(normalized);
+  return routeName(normalized);
 }
 /** 生成服务器入口（虚拟模块）：最少逻辑——createRpcServer + 模块表，prefix 由插件选项注入 */
 function generateServerEntry(serverPath: string, prefix: string): string {
@@ -204,14 +205,14 @@ await createRpcServer({ prefix: ${safePrefix}, modules });
 `;
 }
 
-/** 生成模块表（虚拟模块）：import.meta.glob 构建期展开；route = routeHash(相对 root 的完整路径) */
+/** 生成模块表（虚拟模块）：import.meta.glob 构建期展开；route = routeName(相对 root 的完整路径) */
 function generateModules(pattern: string, hashPath: string): string {
   const safePattern = JSON.stringify(pattern);
   const safeHash = JSON.stringify(hashPath);
-  return `import { routeHash } from ${safeHash};
+  return `import { routeName } from ${safeHash};
 const globs = import.meta.glob(${safePattern});
 export default Object.fromEntries(
-  Object.entries(globs).map(([k, v]) => [routeHash(k), v]),
+  Object.entries(globs).map(([k, v]) => [routeName(k), v]),
 );
 `;
 }

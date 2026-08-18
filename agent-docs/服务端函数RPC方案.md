@@ -46,9 +46,11 @@
 ### D1：文件即函数 —— 每个 `.server.ts` 只导出 `export default`
 
 - 一个文件 = 一个服务端函数（MVP）。
-- **路由 = 相对项目 root 的路径（去 pattern 静态前缀与后缀）**（保留目录层级）：
-  pattern `/src/**\/*.server.ts` 下 `src/actions/greet.server.ts` → `POST /rpc/actions/greet`。
-  用路径而非纯文件名，避免 glob 递归下的同名冲突（`src/actions/todo.server.ts` vs `src/admin/todo.server.ts`）。
+- **路由 = routeName(相对项目 root 的完整路径)** = 文件名（第一个点之前）+ "-" + FNV-1a 32 位哈希（36 进制 6-7 位）：
+  `/src/api/greet.server.ts` → `/rpc/greet-plwxl1`。可读（知道是哪个函数）+ 匿名（目录结构不可见、
+  hash 防枚举）+ 稳定（新增/删除文件不影响其他端点）；同名不同目录 → 名字相同 hash 不同天然区分。
+  三端（dev 模块表、客户端 stub、生产模块表）同一函数与同一输入，端点天然一致。
+  约定：pattern 为单个字符串（多 pattern 场景暂不支持，hash 方案下扩展成本很低）。
 - 红利：客户端 stub 不需要知道导出列表（default 约定，本地名用户自取）；服务端注册表退化为"路由名 → 文件路径"；**连构建时的模块加载和导出遍历都省了**，加载延迟到请求时。
 - 扩展预留：default 导出对象时路由加方法段（`/rpc/:name/:method`），MVP 不做。
 
@@ -164,7 +166,7 @@ runtime src/rpc/server.ts（dev/prod 共用）
   调用 + 模块表 import），SSR 构建以它为 input；用户项目零服务器代码
 - **pattern 是唯一事实来源**（插件选项，默认 "/src/**\/*.server.ts"）：
   - 生产：模块表虚拟模块 fly-rpc:modules 内容 = `import.meta.glob(pattern)`，构建时
-    vite:import-glob 展开为 lazy chunks，route = key 去静态前缀与后缀
+    vite:import-glob 展开为 lazy chunks，route = routeName(相对 root 的完整路径)（文件名-hash）
   - 客户端：resolveId 用 createFilter(pattern) 精确匹配（glob 语义完整，单层/递归不误判）
   - dev：ssrLoadModule(模块表虚拟模块)——import.meta.glob 在 dev 下由 Vite 转换，
     无目录扫描；每次请求 invalidate 模块表（新增 .server.ts 文件即用，已验证）
@@ -277,7 +279,7 @@ Body: stringify(args)   // 位置参数数组，与函数声明完全一致
 - "传输编码"：JSON 有类型谎言（Date→string 静默变形），devalue 的 stringify/parse 保真全部内置复杂类型且显式报错——"怎么声明怎么调用、类型与运行时一致"的完整答案。
 - "错误协议"：两类失败分开——协议错误走状态码，业务错误走 RpcError 信封（stub reject 保持 try/catch 与本地调用一致）；普通 throw 的意外错误不跨网络；与 rpc-master 的分歧在于业务错误生产也传（产品的一部分），而非按环境区分。
 - "取消"：服务端 this.signal 必做（连接断开自动 abort）；客户端 per-call cancel 在"类型来自原文件"下无法类型安全暴露（Promise<T> 无 cancel），rpc-master 的 { data, cancel } 正是为类型安全暴露取消付出的包装代价——折中为全局超时 + rpcCancel(p) 辅助函数。
-- "prod 加载"：import.meta.glob 是标准答案——Rollup 静态打包 + dev lazy 加载 HMR 失效，dev/prod 同一份代码；由此路由定为"相对项目 root 去 pattern 前缀"而非纯文件名（防递归同名冲突）。
+- "prod 加载"：import.meta.glob 是标准答案——Rollup 静态打包 + dev lazy 加载 HMR 失效，dev/prod 同一份代码；路由定为 routeName(相对 root 完整路径) = 文件名-hash（FNV-1a，三端同函数同输入）——可读可调试（文件名部分）、匿名（目录不可见）、稳定（新增文件不影响其他端点）。
 
 ## 实现阶段的坑（初始版本已踩平，备忘）
 
