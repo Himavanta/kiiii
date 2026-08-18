@@ -1,5 +1,5 @@
 import { parse, stringify } from "devalue";
-import { isFunction, isObject, isString } from "./guards";
+import { isFunction, isObject, isString } from "./guards.ts";
 
 /**
  * RPC 调用错误：业务错误（服务端 RpcError）跨网络还原后的形态。
@@ -11,7 +11,7 @@ export interface RpcCallError extends Error {
 }
 
 /** 内部标记：挂在返回的 Promise 上，供 rpcCancel() 取出 AbortController */
-const CANCEL_KEY = Symbol("fly-rpc.cancel");
+const CANCEL_KEY = Symbol("kiiii.cancel");
 
 export type CancelablePromise<T> = Promise<T> & { [CANCEL_KEY]?: (reason?: string) => void };
 

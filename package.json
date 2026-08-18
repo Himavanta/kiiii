@@ -1,13 +1,36 @@
 {
-  "name": "fly-generally",
+  "name": "kiiii",
   "version": "0.0.0",
-  "private": true,
+  "description": "A starter for creating a TypeScript package.",
+  "homepage": "https://github.com/author/library#readme",
+  "bugs": {
+    "url": "https://github.com/author/library/issues"
+  },
+  "license": "MIT",
+  "author": "Author Name <author.name@mail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/author/library.git"
+  },
+  "files": [
+    "dist"
+  ],
   "type": "module",
+  "exports": {
+    ".": "./dist/index.js",
+    "./client": "./dist/client.js",
+    "./server": "./dist/server.js",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
-    "dev": "vp dev",
-    "build": "tsc && vp build",
-    "start": "node dist/index.js",
-    "preview": "vp preview",
+    "build": "vp pack",
+    "dev": "vp pack --watch",
+    "test": "vp test",
+    "check": "vp check",
+    "prepublishOnly": "vp run build",
     "prepare": "vp config"
   },
   "dependencies": {
@@ -17,10 +40,13 @@
     "srvx": "^0.12.5"
   },
   "devDependencies": {
-    "@types/node": "^26.2.0",
-    "typescript": "~6.0.2",
-    "vite": "catalog:",
+    "@types/node": "^26.1.1",
+    "bumpp": "^11.1.0",
+    "typescript": "^7.0.2",
     "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "vite": "catalog:"
   },
   "devEngines": {
     "packageManager": {

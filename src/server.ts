@@ -6,7 +6,11 @@ import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parse, stringify } from "devalue";
-import { isError, isFunction } from "./guards";
+import { isError, isFunction } from "./guards.ts";
+
+// server 子路径导出：模块表组装与路由哈希（生成代码 import "kiiii/server" 使用）
+export { buildModuleMap } from "./modules.ts";
+export { routeHash } from "./hash.ts";
 
 /**
  * 业务错误：显式抛出后其 message/code/data 会跨网络到达客户端
@@ -148,7 +152,7 @@ export function createRpcHandler(options: RpcHandlerOptions) {
         });
       }
       // 意外错误：不泄漏堆栈 / 路径 / 消息
-      console.error(`[fly-rpc] ${route} 执行失败:`, error);
+      console.error(`[kiiii] ${route} 执行失败:`, error);
       if (isDev) {
         return stringify({
           ok: false,
@@ -162,11 +166,11 @@ export function createRpcHandler(options: RpcHandlerOptions) {
 }
 
 // ==================== 服务器入口封装（createRpcServer） ====================
-// 默认形态：插件虚拟入口（fly-rpc:server）调用本函数，用户项目零服务器代码。
+// 默认形态：插件虚拟入口（kiiii:server）调用本函数，用户项目零服务器代码。
 // 逃生舱（高级用法）：自写服务器入口手动组装：
 //
 // ```ts
-// import { createRpcServer } from "fly-rpc/server";
+// import { createRpcServer } from "kiiii";
 // await createRpcServer({
 //   prefix: "rpc",
 //   modules: { "api/greet": () => import("./src/api/greet.server.ts") },
@@ -256,12 +260,12 @@ export interface RpcServerOptions {
 /**
  * 创建并启动生产服务器（RPC + 静态资源 + SPA fallback + listhen 监听，单端口）。
  *
- * 默认形态：插件虚拟入口（fly-rpc:server）调用本函数，全部内部逻辑（h3 app 组装、
+ * 默认形态：插件虚拟入口（kiiii:server）调用本函数，全部内部逻辑（h3 app 组装、
  * 静态服务、history 路由 fallback、监听）由插件封装，用户项目零服务器代码。
  *
  * 构建：单个 vp build（插件 buildApp 钩子接管，虚拟入口为 SSR 构建 input）
  */
-export async function createRpcServer(options: RpcServerOptions) {
+export async function createRpcServer(options: RpcServerOptions): Promise<H3> {
   const prefix = options.prefix ?? "rpc";
   const isDev = options.isDev ?? false;
   const port = options.port ?? Number(process.env.PORT ?? 3000);

@@ -1,9 +1,9 @@
-import { RpcError } from "../rpc/server";
-import type { RpcContext } from "../rpc/server";
+import { RpcError } from "kiiii";
+import type { RpcContext } from "kiiii";
 
 /**
- * 示例服务端函数：客户端 import 本文件时被替换为 fetch stub（见 src/rpc/plugin.ts），
- * 服务端由 h3 handler 加载原文件并通过 fn.call(context, ...args) 分发。
+ * 示例服务端函数：客户端 import 本文件时被替换为 fetch stub（见 kiiii 包），
+ * 服务端由 h3 handler 加载原文件并通过 fn.call(context, ...args) 分发（见 kiiii 包）。
  *
  * 约定：
  * - 文件即函数：每个 .server.ts 只导出 export default

@@ -1,4 +1,4 @@
-import { routeHash } from "./hash";
+import { routeHash } from "./hash.ts";
 
 /**
  * 把 import.meta.glob 的展开结果组装为路由 → 加载器映射。
@@ -15,7 +15,7 @@ export function buildModuleMap(
     const route = routeHash(k);
     const prev = seen.get(route);
     if (prev) {
-      throw new Error(`[fly-rpc] 路由哈希冲突：${prev} 与 ${k}`);
+      throw new Error(`[kiiii] 路由哈希冲突：${prev} 与 ${k}`);
     }
     seen.set(route, k);
     modules[route] = v;
