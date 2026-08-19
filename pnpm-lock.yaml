@@ -245,7 +245,7 @@ importers:
   packages/example:
     devDependencies:
       kiiii:
-        specifier: 'workspace:'
+        specifier: workspace:*
         version: link:../..
       typescript:
         specifier: ~6.0.2

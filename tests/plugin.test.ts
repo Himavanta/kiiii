@@ -40,15 +40,33 @@ test("config：serve 命令不返回构建配置", () => {
   expect(asFn(setup().config!)({}, { command: "serve" } as never)).toBeUndefined();
 });
 
-test("config：build 命令返回 SSR 构建配置", () => {
+test("config：build 命令返回双环境声明（环境模型）", () => {
   const cfg = asFn(setup().config!)({}, { command: "build" } as never) as {
-    build: { ssr: boolean; copyPublicDir: boolean; rolldownOptions: { input: object } };
-    ssr: { noExternal: boolean };
+    builder: object;
+    environments: {
+      server: {
+        build: {
+          ssr: boolean;
+          rolldownOptions: { input: object };
+          outDir: string;
+          copyPublicDir: boolean;
+        };
+      };
+      client: { build: { outDir: string; copyPublicDir: boolean } };
+    };
+    ssr?: { noExternal: boolean };
   };
-  expect(cfg.build.ssr).toBe(true);
-  expect(cfg.build.copyPublicDir).toBe(false);
-  expect(cfg.build.rolldownOptions.input).toEqual({ start: "kiiii:start", index: "kiiii:app" });
-  expect(cfg.ssr.noExternal).toBe(true);
+  expect(cfg.builder).toEqual({});
+  expect(cfg.environments.server.build.ssr).toBe(true);
+  expect(cfg.environments.server.build.rolldownOptions.input).toEqual({
+    start: "kiiii:start",
+    index: "kiiii:app",
+  });
+  expect(cfg.environments.server.build.outDir).toBe("dist/server");
+  expect(cfg.environments.server.build.copyPublicDir).toBe(false);
+  expect(cfg.environments.client.build.outDir).toBe("dist/public");
+  expect(cfg.environments.client.build.copyPublicDir).toBe(true);
+  expect(cfg.ssr?.noExternal).toBe(true);
 });
 
 test("config：bundleDeps=false 时不传 noExternal", () => {

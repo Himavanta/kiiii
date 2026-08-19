@@ -7,8 +7,7 @@ import { createKiiiiApp } from "./server.ts";
 
 export interface StartServerOptions {
   /**
-   * 静态资源目录。默认约定：{项目根}/dist/clients（服务器产物在打包根 dist，
-   * 从项目根启动 `node dist/start.js` 时 ./clients 即客户端产物）。
+   * 静态资源目录。默认约定：{项目根}/dist/public（客户端产物目录，与 Nuxt 布局一致）。
    * 需自定义时传绝对路径或 file: URL
    */
   staticDir?: string | URL;
@@ -34,7 +33,7 @@ export async function startServer(app: H3, options: StartServerOptions = {}): Pr
     import("listhen"),
     import("node:path"),
   ]);
-  const staticDir = options.staticDir ?? join(process.cwd(), "dist", "clients");
+  const staticDir = options.staticDir ?? join(process.cwd(), "dist", "public");
   mountStatic(app, staticDir);
   await listen(toNodeHandler(app), { port, hostname: "0.0.0.0" });
 }

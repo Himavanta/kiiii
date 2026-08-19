@@ -5,7 +5,7 @@
 // import，只该出现在 vite.config.ts；从主入口拿 runtime 会把构建工具拖入业务产物。
 import type { Plugin, ResolvedConfig, ViteDevServer } from "vite";
 import { createFilter } from "vite";
-import { join, relative, isAbsolute } from "node:path";
+import { relative, isAbsolute } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { H3 } from "h3";
 import { toNodeHandler } from "h3/node";
@@ -64,8 +64,6 @@ export function kiiii(options?: KiiiiOptions): Plugin {
   const bundleDeps = options?.bundleDeps ?? true;
   let root = "";
   let isServerModule: ((id: string) => boolean) | null = null;
-  // 用户原始客户端入口（config 钩子保存；buildApp 用于服务器收窄与客户端恢复）
-  let userInput: string | string[] | Record<string, string> | undefined;
   // dev：缓存的请求 handler——文件增删时置空重建，稳态请求零转换零分配
   let devHandler: ReturnType<typeof toNodeHandler> | null = null;
 
@@ -104,21 +102,30 @@ export function kiiii(options?: KiiiiOptions): Plugin {
     },
 
     /**
-     * 构建时声明 SSR 构建：入口为虚拟模块 kiiii:start / kiiii:app（build.ssr 开启 + rolldownOptions.input 指定）。
-     * 用户自定义入口（多入口项目）在此保存——Vite 的 merge 会把双方 input 深合并，
-     * 服务器构建需收窄为虚拟入口、客户端构建需恢复用户原始入口（见 buildApp）。
+     * 构建时声明双环境（Vite 8 环境模型，声明式）：
+     * - server：kiiii 私有空间——SSR + 虚拟入口 + 产物 dist/server
+     * - client：用户空间——只重定向 outDir 到 dist/public，其余配置（input/plugins/alias 等）原样
+     * 用户配置零覆盖循环：客户端入口天然保留（无需保存/恢复），服务器入口只混入用户根 input（buildApp 收窄）
      */
     config(_userConfig, env) {
       if (env.command !== "build") return;
-      // 保存用户客户端入口（rolldownOptions 优先，兼容 rollupOptions 旧字段）
-      userInput =
-        _userConfig.build?.rolldownOptions?.input ?? _userConfig.build?.rollupOptions?.input;
       return {
-        build: {
-          ssr: true,
-          copyPublicDir: false, // public 属于客户端
-          // 双产物：start（自托管：kiiii:app 的封装——拿 app + 启动）/ index（平台：只导出 app）
-          rolldownOptions: { input: { start: START_MODULE, index: APP_MODULE } },
+        builder: {}, // 启用 Vite 8 原生 builder（非 legacy）
+        environments: {
+          server: {
+            build: {
+              ssr: true,
+              rolldownOptions: { input: { start: START_MODULE, index: APP_MODULE } },
+              outDir: "dist/server",
+              copyPublicDir: false, // public 属于客户端
+            },
+          },
+          client: {
+            build: {
+              outDir: "dist/public",
+              copyPublicDir: true,
+            },
+          },
         },
         // 依赖打包策略：bundleDeps=true 全量打包（自包含部署）；false 时不传 noExternal（保持默认 external）。
         // vite 系构建期工具始终 external（Vite merge 对数组 concat，用户自定义 external 保留）
@@ -133,44 +140,24 @@ export function kiiii(options?: KiiiiOptions): Plugin {
       };
     },
 
-    /** 一个 vp build 完成两个环境：先服务器（SSR → 打包根），后客户端（→ {打包根}/clients） */
+    /** 构建 kiiii 声明的双环境：先服务器（dist/server），后客户端（dist/public）——emptyOutDir 天然隔离，顺序自由 */
     async buildApp(builder) {
-      const { config } = builder;
-      // 打包根（build.outDir 已 resolve 为绝对路径）：服务器产物在其根，客户端在其 {outDir}/clients
-      const outDir = config.build.outDir;
-
-      // 服务器环境：input 收窄为 kiiii 虚拟入口（config 钩子 merge 混入的用户入口属于客户端构建）
-      const ssrEnv = builder.environments["ssr"];
-      if (ssrEnv) {
-        ssrEnv.config.build.rolldownOptions = {
-          ...ssrEnv.config.build.rolldownOptions,
-          input: { start: START_MODULE, index: APP_MODULE },
-        };
+      const server = builder.environments["server"];
+      const client = builder.environments["client"];
+      if (!server || !client) {
+        throw new Error("[kiiii] server / client 环境未声明");
       }
-
-      // 客户端环境：清除继承的服务器入口 input（恢复用户原始入口）、重定向 outDir、恢复 public 拷贝
-      const { input: _serverInput, ...clientRolldown } =
-        config.environments.client.build.rolldownOptions ?? {};
-      config.environments["client"] = {
-        ...config.environments.client,
-        build: {
-          ...config.environments.client.build,
-          // 用户自定义入口（多入口项目）原样恢复；无自定义入口时不设置（rolldown 默认 index.html）
-          rolldownOptions: userInput ? { ...clientRolldown, input: userInput } : clientRolldown,
-          ssr: false,
-          outDir: join(outDir, "clients"),
-          copyPublicDir: true,
-        },
+      // 服务器 input 收窄为虚拟入口：Vite 8 根 build 配置是环境默认（用户根 input 会深合并进来）
+      server.config.build.rolldownOptions = {
+        ...server.config.build.rolldownOptions,
+        input: { start: START_MODULE, index: APP_MODULE },
       };
-
-      // 1. 服务器环境：legacy builder 已按 config.build.ssr 自动 setup
-      await builder.build(ssrEnv);
-
-      // 2. 客户端环境 → {打包根}/clients
-      const clientEnv = await config.build.createEnvironment("client", config);
-      await clientEnv.init();
-      builder.environments["client"] = clientEnv;
-      await builder.build(clientEnv);
+      // Vite 8 内置默认 ssr 环境（input 为默认 index.html）跳过——kiiii 只构建声明的两个环境
+      for (const env of Object.values(builder.environments)) {
+        if (env !== server && env !== client) env.isBuilt = true;
+      }
+      await builder.build(server);
+      await builder.build(client);
     },
 
     async resolveId(source, importer, resolveOptions) {
