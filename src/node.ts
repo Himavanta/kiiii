@@ -1,5 +1,5 @@
 // 自托管启动（node 专属）：静态资源 + SPA fallback + listhen 监听。
-// 独立于跨运行时核心（kiiii/server）——平台部署产物（kiiii:app）不引用本入口，
+// 独立于跨运行时核心（kiiii/server）——平台部署入口（kiiii:app，产物 dist/index.js）不引用本入口，
 // 保证其依赖链彻底无 node 引用（Cloudflare Workers 等 Web 运行时可直接打包）。
 import type { H3 } from "h3";
 import type { KiiiiAppOptions } from "./server.ts";

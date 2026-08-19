@@ -17,13 +17,13 @@ import { isArray, isEmpty, isNil } from "./guards.ts";
 /** Vite 约定：虚拟 id 以 \0 开头（非合法文件名字符），与真实文件路径必然不冲突 */
 const virtual = (id: string): string => `\0${id}`;
 
-/** 自托管启动虚拟模块（公开名 → 内部 \0 id）：kiiii:app 的封装（拿 app + 启动），直接运行时（node dist/start.js）触发 */
+/** 自托管启动虚拟模块：kiiii:app 的封装（拿 app + 启动），node dist/start.js 直接运行时经 import.meta.main 启动 */
 const START_MODULE = "kiiii:start";
 const START_ID = virtual(START_MODULE);
-/** 平台入口虚拟模块（公开名 → 内部 \0 id）：导出 app（无状态，平台包装 toNodeHandler / toWebHandler） */
+/** 平台入口虚拟模块：导出 app（无状态，平台包装 toNodeHandler / toWebHandler） */
 const APP_MODULE = "kiiii:app";
 const APP_ID = virtual(APP_MODULE);
-/** 模块表虚拟模块（公开名 → 内部 \0 id） */
+/** 模块表虚拟模块 */
 const MODULES_MODULE = "kiiii:modules";
 const MODULES_ID = virtual(MODULES_MODULE);
 /** 客户端 stub 虚拟模块前缀（\0kiiii:{route}） */
