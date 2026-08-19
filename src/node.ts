@@ -8,7 +8,7 @@ import { createKiiiiApp } from "./server.ts";
 export interface StartServerOptions {
   /**
    * 静态资源目录。默认约定：{项目根}/dist/clients（服务器产物在打包根 dist，
-   * 从项目根启动 `node dist/index.js` 时 ./clients 即客户端产物）。
+   * 从项目根启动 `node dist/start.js` 时 ./clients 即客户端产物）。
    * 需自定义时传绝对路径或 file: URL
    */
   staticDir?: string | URL;
@@ -42,7 +42,7 @@ export async function startServer(app: H3, options: StartServerOptions = {}): Pr
 /**
  * 创建并启动生产服务器（远程调用 + 静态资源 + SPA fallback + listhen 监听，单端口）。
  *
- * 默认形态：插件虚拟入口（kiiii:server）调用本函数，全部内部逻辑（h3 app 组装、
+ * 默认形态：插件虚拟入口（kiiii:start）调用本函数，全部内部逻辑（h3 app 组装、
  * 静态服务、history 路由 fallback、监听）由插件封装，用户项目零服务器代码。
  * 逃生舱（高级用法）：自写服务器入口手动组装 createKiiiiApp + startServer。
  *

@@ -140,8 +140,8 @@ The trade-offs: the payload is not standard JSON (Content-Type is `text/plain`),
 |                | Vite 插件——`kiiii`、`KiiiiOptions`                                                                         | `vite.config.ts`                      |
 | `kiiii/server` | `KiiiiContext`, `createKiiiiApp`, `createKiiiiHandler`, `buildModuleMap`, `routeHash` — cross-runtime core | Server function files, generated code |
 |                | `KiiiiContext`、`createKiiiiApp`、`createKiiiiHandler`、`buildModuleMap`、`routeHash`——跨运行时核心        | 服务器函数文件、生成代码              |
-| `kiiii/node`   | `createKiiiiServer`, `startServer` — self-hosted startup (Node-only)                                       | `node dist/index.js`, escape hatch    |
-|                | `createKiiiiServer`、`startServer`——自托管启动（Node 专属）                                                | `node dist/index.js`、逃生舱          |
+| `kiiii/node`   | `createKiiiiServer`, `startServer` — self-hosted startup (Node-only)                                       | `node dist/start.js`, escape hatch    |
+|                | `createKiiiiServer`、`startServer`——自托管启动（Node 专属）                                                | `node dist/start.js`、逃生舱          |
 | `kiiii/client` | `invoke`, `cancel`                                                                                         | Generated stubs, manual cancellation  |
 |                | `invoke`、`cancel`                                                                                         | 生成 stub、手动取消                   |
 | `kiiii/error`  | `KiiiiError`, `isKiiiiError` — cross-end public entry, zero dependencies                                   | Any module                            |
@@ -193,9 +193,9 @@ The trade-offs: the payload is not standard JSON (Content-Type is `text/plain`),
 
 ## Deployment / 部署
 
-Two entry artifacts are produced by one `vp build`: `dist/index.js` (self-hosted) and `dist/app.js` (stateless app for platform deployment). The stateless app only handles remote calls — static assets and history-route fallback are the platform's job (Vercel `public`, Cloudflare assets, etc.).
+Two entry artifacts are produced by one `vp build`: `dist/start.js` (self-hosted: wraps `index` — app + static + listen) and `dist/index.js` (the platform entry: exports the stateless app). The stateless app only handles remote calls — static assets and history-route fallback are the platform's job (Vercel `public`, Cloudflare assets, etc.). Running `node dist/index.js` directly exits silently (it never starts a server).
 
-一次 `vp build` 产出两个入口产物：`dist/index.js`（自托管）与 `dist/app.js`（无状态 app，供平台部署）。无状态 app 只处理远程调用——静态资源与 history 路由回退由平台负责（Vercel `public`、Cloudflare assets 等）。
+一次 `vp build` 产出两个入口产物：`dist/start.js`（自托管：`index` 的封装——app + 静态 + 监听）与 `dist/index.js`（平台入口：导出无状态 app）。无状态 app 只处理远程调用——静态资源与 history 路由回退由平台负责（Vercel `public`、Cloudflare assets 等）。直接运行 `node dist/index.js` 会静默退出（它不启动任何服务器）。
 
 **Self-hosted (default):**
 
@@ -203,8 +203,8 @@ Two entry artifacts are produced by one `vp build`: `dist/index.js` (self-hosted
 
 ```bash
 vp build
-node dist/index.js   # single port: remote calls + static + SPA fallback
-PORT=8080 node dist/index.js   # custom port
+node dist/start.js   # single port: remote calls + static + SPA fallback
+PORT=8080 node dist/start.js   # custom port
 ```
 
 **Platform deployment (Vercel, Node Functions):**
@@ -214,7 +214,7 @@ PORT=8080 node dist/index.js   # custom port
 ```js
 // api/index.js — import the built app and hand it to the platform
 import { toNodeHandler } from "h3/node";
-import app from "../dist/app.js";
+import app from "../dist/index.js";
 
 export default toNodeHandler(app);
 ```
@@ -230,7 +230,7 @@ The platform entry is a plain file in your project (a few lines) — the plugin 
 ```js
 // worker.js
 import { toWebHandler } from "h3";
-import app from "./dist/app.js";
+import app from "./dist/index.js";
 
 export default {
   fetch: toWebHandler(app),
@@ -261,5 +261,5 @@ Run the example app:
 cd packages/example
 pnpm dev         # example dev server (remote calls + HMR)
 pnpm build       # example build (server + client)
-node dist/index.js   # run the production build (single port)
+node dist/start.js   # run the production build (single port)
 ```

@@ -139,7 +139,7 @@ export function createKiiiiHandler(options: KiiiiHandlerOptions) {
 }
 
 // ==================== 无状态 app 组装（createKiiiiApp） ====================
-// 默认形态：插件虚拟入口（kiiii:server / kiiii:app）调用本函数，用户项目零服务器代码。
+// 默认形态：插件虚拟入口（kiiii:start / kiiii:app）调用本函数，用户项目零服务器代码。
 // 逃生舱（高级用法）：自写服务器入口手动组装（自托管启动从 kiiii/node 拿 startServer）：
 //
 // ```ts

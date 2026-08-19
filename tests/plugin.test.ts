@@ -6,7 +6,7 @@ import { kiiii, type KiiiiOptions } from "../src/index.ts";
 import { routeHash } from "../src/modules.ts";
 
 const ROOT = "/project";
-const SERVER_ID = "\0kiiii:server";
+const START_ID = "\0kiiii:start";
 const APP_ID = "\0kiiii:app";
 const MODULES_ID = "\0kiiii:modules";
 
@@ -47,7 +47,7 @@ test("config：build 命令返回 SSR 构建配置", () => {
   };
   expect(cfg.build.ssr).toBe(true);
   expect(cfg.build.copyPublicDir).toBe(false);
-  expect(cfg.build.rolldownOptions.input).toEqual({ index: "kiiii:server", app: "kiiii:app" });
+  expect(cfg.build.rolldownOptions.input).toEqual({ start: "kiiii:start", index: "kiiii:app" });
   expect(cfg.ssr.noExternal).toBe(true);
 });
 
@@ -78,11 +78,11 @@ test("resolveId：无 importer 不拦截", async () => {
 test("resolveId：虚拟模块解析（任意解析模式）", async () => {
   const plugin = setup();
   expect(
-    await asFn(plugin.resolveId!)("kiiii:server", `${ROOT}/src/main.ts`, {
+    await asFn(plugin.resolveId!)("kiiii:start", `${ROOT}/src/main.ts`, {
       ssr: true,
       isEntry: false,
     }),
-  ).toBe(SERVER_ID);
+  ).toBe(START_ID);
   expect(
     await asFn(plugin.resolveId!)("kiiii:app", `${ROOT}/src/main.ts`, {
       ssr: true,
@@ -130,13 +130,12 @@ test("resolveId：root 之外 → null", async () => {
   expect(id).toBeNull();
 });
 
-test("load：服务器入口生成（导出 app + import.meta.main 条件启动）", () => {
-  const code = asFn(setup({ prefix: "api" }).load!)(SERVER_ID) as string;
-  expect(code).toContain('import { createKiiiiApp } from "kiiii/server"');
+test("load：自托管启动入口生成（kiiii:app 的封装——拿 app + 启动）", () => {
+  const code = asFn(setup({ prefix: "api" }).load!)(START_ID) as string;
+  expect(code).toContain('import app from "kiiii:app"');
   expect(code).toContain('import { startServer } from "kiiii/node"');
-  expect(code).toContain('import modules from "kiiii:modules"');
-  expect(code).toContain('export const app = createKiiiiApp({ prefix: "api", modules });');
   expect(code).toContain("if (import.meta.main) await startServer(app);");
+  expect(code).not.toContain("createKiiiiApp");
 });
 
 test("load：平台入口生成（只导出 app，无启动分支）", () => {

@@ -17,10 +17,10 @@ import { isArray, isEmpty, isNil } from "./guards.ts";
 /** Vite 约定：虚拟 id 以 \0 开头（非合法文件名字符），与真实文件路径必然不冲突 */
 const virtual = (id: string): string => `\0${id}`;
 
-/** 服务器入口虚拟模块（公开名 → 内部 \0 id）：自托管（导出 app + 直接运行时启动） */
-const SERVER_MODULE = "kiiii:server";
-const SERVER_ID = virtual(SERVER_MODULE);
-/** 平台入口虚拟模块（公开名 → 内部 \0 id）：只导出 app（无状态，平台包装 toNodeHandler / toWebHandler） */
+/** 自托管启动虚拟模块（公开名 → 内部 \0 id）：kiiii:app 的封装（拿 app + 启动），直接运行时（node dist/start.js）触发 */
+const START_MODULE = "kiiii:start";
+const START_ID = virtual(START_MODULE);
+/** 平台入口虚拟模块（公开名 → 内部 \0 id）：导出 app（无状态，平台包装 toNodeHandler / toWebHandler） */
 const APP_MODULE = "kiiii:app";
 const APP_ID = virtual(APP_MODULE);
 /** 模块表虚拟模块（公开名 → 内部 \0 id） */
@@ -51,8 +51,8 @@ export interface KiiiiOptions {
  *
  * pattern 是唯一事实来源：route = routeHash(相对 root 的完整路径)，三个消费端共用同一 pattern 与算法——
  * dev（ssrLoadModule + 每请求重载模块表）、客户端（createFilter 匹配 → 虚拟 stub）、
- * 生产（SSR 构建以虚拟入口 kiiii:server 为 input，glob 展开为 lazy chunks）。
- * 服务器入口代码由插件生成（kiiii:server 自托管 / kiiii:app 无状态平台入口），用户项目零服务器代码。
+ * 生产（SSR 构建以虚拟入口 kiiii:start 为 input，glob 展开为 lazy chunks）。
+ * 服务器入口代码由插件生成（kiiii:start 自托管 / kiiii:app 无状态平台入口），用户项目零服务器代码。
  */
 export function kiiii(options?: KiiiiOptions): Plugin {
   const pattern = options?.pattern;
@@ -101,15 +101,15 @@ export function kiiii(options?: KiiiiOptions): Plugin {
       isServerModule = createFilter(pattern);
     },
 
-    /** 构建时声明 SSR 构建：入口为虚拟模块 kiiii:server（build.ssr 开启 + rolldownOptions.input 指定） */
+    /** 构建时声明 SSR 构建：入口为虚拟模块 kiiii:start（build.ssr 开启 + rolldownOptions.input 指定） */
     config(_userConfig, env) {
       if (env.command !== "build") return;
       return {
         build: {
           ssr: true,
           copyPublicDir: false, // public 属于客户端
-          // 双产物：index（自托管：导出 app + 直接运行时启动）/ app（平台：只导出 app）
-          rolldownOptions: { input: { index: SERVER_MODULE, app: APP_MODULE } },
+          // 双产物：start（自托管：kiiii:app 的封装——拿 app + 启动）/ index（平台：只导出 app）
+          rolldownOptions: { input: { start: START_MODULE, index: APP_MODULE } },
         },
         // 依赖打包策略：bundleDeps=true 全量打包（自包含部署）；false 时不传 noExternal（保持默认 external）。
         // vite 系构建期工具始终 external
@@ -154,8 +154,8 @@ export function kiiii(options?: KiiiiOptions): Plugin {
     },
 
     async resolveId(source, importer, resolveOptions) {
-      // 虚拟模块（服务器入口 + 平台入口 + 模块表）
-      if (source === SERVER_MODULE) return SERVER_ID;
+      // 虚拟模块（自托管启动 + 平台入口 + 模块表）
+      if (source === START_MODULE) return START_ID;
       if (source === APP_MODULE) return APP_ID;
       if (source === MODULES_MODULE) return MODULES_ID;
 
@@ -172,8 +172,8 @@ export function kiiii(options?: KiiiiOptions): Plugin {
     },
 
     load(id) {
-      if (id === SERVER_ID) {
-        return generateServerEntry(prefix);
+      if (id === START_ID) {
+        return generateStartEntry();
       }
       if (id === APP_ID) {
         return generateAppEntry(prefix);
@@ -233,15 +233,13 @@ function toRoute(id: string, root: string, isServerModule: (id: string) => boole
  */
 const lit = (value: unknown): string => JSON.stringify(value);
 
-/** 生成服务器入口（虚拟模块）：导出 app（平台可引用），直接运行时自托管启动 */
-function generateServerEntry(prefix: string): string {
-  return `import { createKiiiiApp } from "kiiii/server";
+/** 生成自托管启动入口（虚拟模块）：kiiii:app 的封装——拿 app + 静态 + 监听（node dist/start.js 直接运行） */
+function generateStartEntry(): string {
+  return `import app from "kiiii:app";
 import { startServer } from "kiiii/node";
-import modules from "kiiii:modules";
 
-// 由 kiiii 生成的服务器入口（虚拟模块）：导出 app；直接运行时（node dist/index.js）自托管启动
-// import.meta.main：node 22.13+ 直接执行时为 true；被平台 import 时为 false（不启动）
-export const app = createKiiiiApp({ prefix: ${lit(prefix)}, modules });
+// 由 kiiii 生成的自托管启动入口（虚拟模块）：kiiii:app 的封装（app 组装在 kiiii:app 单源维护）
+// import.meta.main：node 22.13+ 直接执行时为 true；被 import 时不启动（任何方式引用都无副作用）
 if (import.meta.main) await startServer(app);
 `;
 }
