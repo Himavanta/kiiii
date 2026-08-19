@@ -36,6 +36,7 @@
     ".": "./dist/index.js",
     "./client": "./dist/client.js",
     "./error": "./dist/error.js",
+    "./node": "./dist/node.js",
     "./server": "./dist/server.js",
     "./package.json": "./package.json"
   },

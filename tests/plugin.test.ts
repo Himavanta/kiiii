@@ -132,7 +132,8 @@ test("resolveId：root 之外 → null", async () => {
 
 test("load：服务器入口生成（导出 app + import.meta.main 条件启动）", () => {
   const code = asFn(setup({ prefix: "api" }).load!)(SERVER_ID) as string;
-  expect(code).toContain('import { createKiiiiApp, startServer } from "kiiii/server"');
+  expect(code).toContain('import { createKiiiiApp } from "kiiii/server"');
+  expect(code).toContain('import { startServer } from "kiiii/node"');
   expect(code).toContain('import modules from "kiiii:modules"');
   expect(code).toContain('export const app = createKiiiiApp({ prefix: "api", modules });');
   expect(code).toContain("if (import.meta.main) await startServer(app);");

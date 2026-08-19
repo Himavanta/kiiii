@@ -6,14 +6,14 @@ export default defineConfig({
   },
   pack: [
     {
-      entry: ["src/index.ts", "src/server.ts"],
+      entry: ["src/index.ts", "src/node.ts"],
       dts: true,
       exports: true,
       platform: "node",
       fixedExtension: false,
     },
     {
-      entry: ["src/client.ts", "src/error.ts"],
+      entry: ["src/client.ts", "src/server.ts", "src/error.ts"],
       dts: true,
       exports: true,
       platform: "neutral",

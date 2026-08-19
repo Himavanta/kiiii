@@ -230,7 +230,8 @@ const lit = (value: unknown): string => JSON.stringify(value);
 
 /** 生成服务器入口（虚拟模块）：导出 app（平台可引用），直接运行时自托管启动 */
 function generateServerEntry(prefix: string): string {
-  return `import { createKiiiiApp, startServer } from "kiiii/server";
+  return `import { createKiiiiApp } from "kiiii/server";
+import { startServer } from "kiiii/node";
 import modules from "kiiii:modules";
 
 // 由 kiiii 生成的服务器入口（虚拟模块）：导出 app；直接运行时（node dist/index.js）自托管启动

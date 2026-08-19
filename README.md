@@ -134,16 +134,18 @@ The trade-offs: the payload is not standard JSON (Content-Type is `text/plain`),
 
 ## Package Entries / 入口约定
 
-| Entry / 入口   | Contents / 内容                                                          | Used by / 使用方                      |
-| -------------- | ------------------------------------------------------------------------ | ------------------------------------- |
-| `kiiii`        | Vite plugin — `kiiii`, `KiiiiOptions`                                    | `vite.config.ts`                      |
-|                | Vite 插件——`kiiii`、`KiiiiOptions`                                       | `vite.config.ts`                      |
-| `kiiii/server` | `KiiiiContext`, `createKiiiiServer`, `buildModuleMap`, `routeHash`       | Server function files, generated code |
-|                | `KiiiiContext`、`createKiiiiServer`、`buildModuleMap`、`routeHash`       | 服务器函数文件、生成代码              |
-| `kiiii/client` | `invoke`, `cancel`                                                       | Generated stubs, manual cancellation  |
-|                | `invoke`、`cancel`                                                       | 生成 stub、手动取消                   |
-| `kiiii/error`  | `KiiiiError`, `isKiiiiError` — cross-end public entry, zero dependencies | Any module                            |
-|                | `KiiiiError`、`isKiiiiError`——跨端公共入口，零依赖                       | 任何模块                              |
+| Entry / 入口   | Contents / 内容                                                                                            | Used by / 使用方                      |
+| -------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| `kiiii`        | Vite plugin — `kiiii`, `KiiiiOptions`                                                                      | `vite.config.ts`                      |
+|                | Vite 插件——`kiiii`、`KiiiiOptions`                                                                         | `vite.config.ts`                      |
+| `kiiii/server` | `KiiiiContext`, `createKiiiiApp`, `createKiiiiHandler`, `buildModuleMap`, `routeHash` — cross-runtime core | Server function files, generated code |
+|                | `KiiiiContext`、`createKiiiiApp`、`createKiiiiHandler`、`buildModuleMap`、`routeHash`——跨运行时核心        | 服务器函数文件、生成代码              |
+| `kiiii/node`   | `createKiiiiServer`, `startServer` — self-hosted startup (Node-only)                                       | `node dist/index.js`, escape hatch    |
+|                | `createKiiiiServer`、`startServer`——自托管启动（Node 专属）                                                | `node dist/index.js`、逃生舱          |
+| `kiiii/client` | `invoke`, `cancel`                                                                                         | Generated stubs, manual cancellation  |
+|                | `invoke`、`cancel`                                                                                         | 生成 stub、手动取消                   |
+| `kiiii/error`  | `KiiiiError`, `isKiiiiError` — cross-end public entry, zero dependencies                                   | Any module                            |
+|                | `KiiiiError`、`isKiiiiError`——跨端公共入口，零依赖                                                         | 任何模块                              |
 
 ## Options / 选项
 
@@ -217,9 +219,27 @@ import app from "../dist/app.js";
 export default toNodeHandler(app);
 ```
 
-The platform entry is a plain file in your project (a few lines) — the plugin never generates it, since every platform has its own conventions. Cloudflare Workers / EdgeOne (Web runtime) are planned via `toWebHandler` but not yet verified — the stateless entry still references some Node-only code paths.
+The platform entry is a plain file in your project (a few lines) — the plugin never generates it, since every platform has its own conventions.
 
-平台入口是项目里的普通文件（几行代码）——插件不生成它，因为各平台约定不同。Cloudflare Workers / EdgeOne（Web 运行时）计划通过 `toWebHandler` 支持，尚未验证——无状态入口仍引用少量 Node 专属代码路径。
+平台入口是项目里的普通文件（几行代码）——插件不生成它，因为各平台约定不同。
+
+**Cloudflare Workers / EdgeOne (Web runtime):**
+
+**Cloudflare Workers / EdgeOne（Web 运行时）：**
+
+```js
+// worker.js
+import { toWebHandler } from "h3";
+import app from "./dist/app.js";
+
+export default {
+  fetch: toWebHandler(app),
+};
+```
+
+The stateless entry has zero Node dependencies in its chunk graph (verified), and the h3 web adapter resolves via the `workerd` export condition — loading and remote calls verified under `node --conditions=workerd`. A real Cloudflare deploy has not been tested yet; `wrangler` may require config tweaks.
+
+无状态入口的 chunk 依赖图零 node 引用（已实测），h3 的 web 适配经 `workerd` 条件导出解析——已在 `node --conditions=workerd` 下验证加载与远程调用。真实 Cloudflare 部署尚未实测；`wrangler` 可能需少量配置调整。
 
 ## Development / 开发
 
