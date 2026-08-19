@@ -26,7 +26,7 @@ const APP_ID = virtual(APP_MODULE);
 /** 模块表虚拟模块 */
 const MODULES_MODULE = "kiiii:modules";
 const MODULES_ID = virtual(MODULES_MODULE);
-/** 客户端 stub 虚拟模块前缀（\0kiiii:{route}） */
+/** 客户端 stub 虚拟模块前缀 */
 const VIRTUAL_PREFIX = virtual("kiiii:");
 
 export interface KiiiiOptions {
@@ -64,6 +64,8 @@ export function kiiii(options?: KiiiiOptions): Plugin {
   const bundleDeps = options?.bundleDeps ?? true;
   let root = "";
   let isServerModule: ((id: string) => boolean) | null = null;
+  // 用户原始客户端入口（config 钩子保存；buildApp 用于服务器收窄与客户端恢复）
+  let userInput: string | string[] | Record<string, string> | undefined;
   // dev：缓存的请求 handler——文件增删时置空重建，稳态请求零转换零分配
   let devHandler: ReturnType<typeof toNodeHandler> | null = null;
 
@@ -101,9 +103,16 @@ export function kiiii(options?: KiiiiOptions): Plugin {
       isServerModule = createFilter(pattern);
     },
 
-    /** 构建时声明 SSR 构建：入口为虚拟模块 kiiii:start（build.ssr 开启 + rolldownOptions.input 指定） */
+    /**
+     * 构建时声明 SSR 构建：入口为虚拟模块 kiiii:start / kiiii:app（build.ssr 开启 + rolldownOptions.input 指定）。
+     * 用户自定义入口（多入口项目）在此保存——Vite 的 merge 会把双方 input 深合并，
+     * 服务器构建需收窄为虚拟入口、客户端构建需恢复用户原始入口（见 buildApp）。
+     */
     config(_userConfig, env) {
       if (env.command !== "build") return;
+      // 保存用户客户端入口（rolldownOptions 优先，兼容 rollupOptions 旧字段）
+      userInput =
+        _userConfig.build?.rolldownOptions?.input ?? _userConfig.build?.rollupOptions?.input;
       return {
         build: {
           ssr: true,
@@ -112,7 +121,7 @@ export function kiiii(options?: KiiiiOptions): Plugin {
           rolldownOptions: { input: { start: START_MODULE, index: APP_MODULE } },
         },
         // 依赖打包策略：bundleDeps=true 全量打包（自包含部署）；false 时不传 noExternal（保持默认 external）。
-        // vite 系构建期工具始终 external
+        // vite 系构建期工具始终 external（Vite merge 对数组 concat，用户自定义 external 保留）
         ...(bundleDeps
           ? {
               ssr: {
@@ -129,14 +138,25 @@ export function kiiii(options?: KiiiiOptions): Plugin {
       const { config } = builder;
       // 打包根（build.outDir 已 resolve 为绝对路径）：服务器产物在其根，客户端在其 {outDir}/clients
       const outDir = config.build.outDir;
-      // 客户端环境：清除继承的服务器入口 input、重定向 outDir、恢复 public 拷贝
+
+      // 服务器环境：input 收窄为 kiiii 虚拟入口（config 钩子 merge 混入的用户入口属于客户端构建）
+      const ssrEnv = builder.environments["ssr"];
+      if (ssrEnv) {
+        ssrEnv.config.build.rolldownOptions = {
+          ...ssrEnv.config.build.rolldownOptions,
+          input: { start: START_MODULE, index: APP_MODULE },
+        };
+      }
+
+      // 客户端环境：清除继承的服务器入口 input（恢复用户原始入口）、重定向 outDir、恢复 public 拷贝
       const { input: _serverInput, ...clientRolldown } =
         config.environments.client.build.rolldownOptions ?? {};
       config.environments["client"] = {
         ...config.environments.client,
         build: {
           ...config.environments.client.build,
-          rolldownOptions: clientRolldown,
+          // 用户自定义入口（多入口项目）原样恢复；无自定义入口时不设置（rolldown 默认 index.html）
+          rolldownOptions: userInput ? { ...clientRolldown, input: userInput } : clientRolldown,
           ssr: false,
           outDir: join(outDir, "clients"),
           copyPublicDir: true,
@@ -144,7 +164,7 @@ export function kiiii(options?: KiiiiOptions): Plugin {
       };
 
       // 1. 服务器环境：legacy builder 已按 config.build.ssr 自动 setup
-      await builder.build(builder.environments["ssr"]);
+      await builder.build(ssrEnv);
 
       // 2. 客户端环境 → {打包根}/clients
       const clientEnv = await config.build.createEnvironment("client", config);
