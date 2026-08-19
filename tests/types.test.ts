@@ -7,7 +7,7 @@ import { H3 } from "h3";
 import { toNodeHandler } from "h3/node";
 import { parse, stringify } from "devalue";
 import { createKiiiiHandler } from "../src/server.ts";
-import { routeHash } from "../src/hash.ts";
+import { routeHash } from "../src/modules.ts";
 
 const prefix = "kiiii";
 const route = routeHash("/tests/fixtures/echo.server.ts");

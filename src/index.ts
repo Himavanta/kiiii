@@ -11,7 +11,7 @@ import { H3 } from "h3";
 import { toNodeHandler } from "h3/node";
 import { createKiiiiHandler } from "./server.ts";
 import type { KiiiiModuleMap } from "./server.ts";
-import { routeHash } from "./hash.ts";
+import { routeHash } from "./modules.ts";
 import { isArray, isEmpty, isNil } from "./guards.ts";
 
 /** Vite 约定：虚拟 id 以 \0 开头（非合法文件名字符），与真实文件路径必然不冲突 */

@@ -9,7 +9,7 @@ import { writeFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { parse, stringify } from "devalue";
 import { kiiii } from "../src/index.ts";
-import { routeHash } from "../src/hash.ts";
+import { routeHash } from "../src/modules.ts";
 import { invoke, cancel } from "../src/client.ts";
 
 const root = join(import.meta.dirname, "fixtures", "dev-app");

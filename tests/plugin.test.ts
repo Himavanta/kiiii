@@ -3,7 +3,7 @@
 import { expect, test } from "vite-plus/test";
 import type { Plugin, ResolvedConfig } from "vite";
 import { kiiii, type KiiiiOptions } from "../src/index.ts";
-import { routeHash } from "../src/hash.ts";
+import { routeHash } from "../src/modules.ts";
 
 const ROOT = "/project";
 const SERVER_ID = "\0kiiii:server";

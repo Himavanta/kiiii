@@ -5,8 +5,7 @@ import { isFunction } from "./guards.ts";
 
 // server 子路径导出：模块表组装与路由哈希（生成代码 import "kiiii/server" 使用）。
 // 错误协议不在 server 导出——跨端公共概念，唯一主来源 kiiii/error
-export { buildModuleMap } from "./modules.ts";
-export { routeHash } from "./hash.ts";
+export { buildModuleMap, routeHash } from "./modules.ts";
 import { isKiiiiError } from "./error.ts";
 
 /**

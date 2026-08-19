@@ -1,5 +1,5 @@
 import { expect, test } from "vite-plus/test";
-import { routeHash } from "../src/hash.ts";
+import { routeHash } from "../src/modules.ts";
 import { buildModuleMap } from "../src/modules.ts";
 
 test("routeHash：确定性、区分路径、区分同名不同扩展名", () => {
