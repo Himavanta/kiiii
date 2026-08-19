@@ -1,6 +1,7 @@
 catalog:
   vite: npm:@voidzero-dev/vite-plus-core@0.2.9
   vite-plus: 0.2.9
+  h3: 2.0.1-rc.26
 overrides:
   vite: "catalog:"
 peerDependencyRules:

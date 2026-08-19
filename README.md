@@ -228,9 +228,33 @@ import app from "../dist/server/index.js";
 export default toNodeHandler(app);
 ```
 
+```json
+// vercel.json — build output + static directory + rewrites (RPC → function, SPA fallback)
+{
+  "buildCommand": "pnpm build",
+  "outputDirectory": "dist/public",
+  "rewrites": [
+    { "source": "/kiiii/(.*)", "destination": "/api/index" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}
+```
+
 The platform entry is a plain file in your project (a few lines) — the plugin never generates it, since every platform has its own conventions.
 
 平台入口是项目里的普通文件（几行代码）——插件不生成它，因为各平台约定不同。
+
+```json
+// vercel.json——构建命令 + 静态目录 + 重写（RPC → 函数，SPA fallback）
+{
+  "buildCommand": "pnpm build",
+  "outputDirectory": "dist/public",
+  "rewrites": [
+    { "source": "/kiiii/(.*)", "destination": "/api/index" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}
+```
 
 **Cloudflare Workers / EdgeOne (Web runtime):**
 

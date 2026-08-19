@@ -9,6 +9,7 @@
     "preview": "vp preview"
   },
   "devDependencies": {
+    "h3": "catalog:",
     "kiiii": "workspace:*",
     "typescript": "~6.0.2",
     "vite": "catalog:",

@@ -205,6 +205,9 @@ settings:
 
 catalogs:
   default:
+    h3:
+      specifier: 2.0.1-rc.26
+      version: 2.0.1-rc.26
     vite-plus:
       specifier: 0.2.9
       version: 0.2.9
@@ -244,6 +247,9 @@ importers:
 
   packages/example:
     devDependencies:
+      h3:
+        specifier: 'catalog:'
+        version: 2.0.1-rc.26(crossws@0.4.10(srvx@0.12.5))
       kiiii:
         specifier: workspace:*
         version: link:../..
