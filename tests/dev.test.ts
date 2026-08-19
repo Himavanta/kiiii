@@ -8,7 +8,7 @@ import type { AddressInfo } from "node:net";
 import { writeFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { parse, stringify } from "devalue";
-import { kiiii } from "../src/plugin.ts";
+import { kiiii } from "../src/index.ts";
 import { routeHash } from "../src/hash.ts";
 import { invoke, cancel } from "../src/client.ts";
 

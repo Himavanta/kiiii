@@ -2,7 +2,7 @@
 // buildApp 钩子（双环境构建）由 example build 端到端覆盖。
 import { expect, test } from "vite-plus/test";
 import type { Plugin, ResolvedConfig } from "vite";
-import { kiiii, type KiiiiOptions } from "../src/plugin.ts";
+import { kiiii, type KiiiiOptions } from "../src/index.ts";
 import { routeHash } from "../src/hash.ts";
 
 const ROOT = "/project";
