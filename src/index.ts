@@ -5,7 +5,7 @@
 // import，只该出现在 vite.config.ts；从主入口拿 runtime 会把构建工具拖入业务产物。
 import type { Plugin, ResolvedConfig, ViteDevServer } from "vite";
 import { createFilter } from "vite";
-import { relative, isAbsolute } from "node:path";
+import { join, relative, isAbsolute } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { H3 } from "h3";
 import { toNodeHandler } from "h3/node";
@@ -103,12 +103,15 @@ export function kiiii(options?: KiiiiOptions): Plugin {
 
     /**
      * 构建时声明双环境（Vite 8 环境模型，声明式）：
-     * - server：kiiii 私有空间——SSR + 虚拟入口 + 产物 dist/server
-     * - client：用户空间——只重定向 outDir 到 dist/public，其余配置（input/plugins/alias 等）原样
+     * - server：kiiii 私有空间——SSR + 虚拟入口 + 产物 {outDir}/server
+     * - client：用户空间——outDir 重定向到 {outDir}/public（其余 input/plugins/alias 等原样）
+     * 用户 outDir 用作产物根（默认 dist）：kiiii 只在其中建 public/server 两个子目录，不覆盖用户值。
      * 用户配置零覆盖循环：客户端入口天然保留（无需保存/恢复），服务器入口只混入用户根 input（buildApp 收窄）
      */
     config(_userConfig, env) {
       if (env.command !== "build") return;
+      // 用户 outDir（相对 root）作为产物根；kiiii 的 public/server 子目录基于它拼接
+      const userOutDir = _userConfig.build?.outDir ?? "dist";
       return {
         builder: {}, // 启用 Vite 8 原生 builder（非 legacy）
         environments: {
@@ -116,13 +119,13 @@ export function kiiii(options?: KiiiiOptions): Plugin {
             build: {
               ssr: true,
               rolldownOptions: { input: { start: START_MODULE, index: APP_MODULE } },
-              outDir: "dist/server",
+              outDir: join(userOutDir, "server"),
               copyPublicDir: false, // public 属于客户端
             },
           },
           client: {
             build: {
-              outDir: "dist/public",
+              outDir: join(userOutDir, "public"),
               copyPublicDir: true,
             },
           },

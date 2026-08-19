@@ -147,6 +147,15 @@ The trade-offs: the payload is not standard JSON (Content-Type is `text/plain`),
 | `kiiii/error`  | `KiiiiError`, `isKiiiiError` — cross-end public entry, zero dependencies                                   | Any module                                |
 |                | `KiiiiError`、`isKiiiiError`——跨端公共入口，零依赖                                                         | 任何模块                                  |
 
+## Build Integration / 构建集成
+
+The plugin declares two environments (Vite 8 environment model): `server` (kiiii's private space — SSR + virtual entries + `{outDir}/server`) and `client` (your space — only `outDir` redirected to `{outDir}/public`). Everything else in your config (plugins, alias, css, resolve, base, publicDir, inputs) is inherited as-is. Your `build.outDir` becomes the output root.
+
+插件声明两个环境（Vite 8 环境模型）：`server`（kiiii 私有空间——SSR + 虚拟入口 + `{outDir}/server`）与 `client`（你的空间——仅 `outDir` 重定向到 `{outDir}/public`）。配置里的其余一切（plugins、alias、css、resolve、base、publicDir、input）原样继承。你的 `build.outDir` 作为产物根。
+
+- Vite 8 (Rolldown) note: `rollupOptions.output.manualChunks` only accepts a function (object form is a Rolldown limitation, fails on plain Vite too).
+- Vite 8（Rolldown）注意：`rollupOptions.output.manualChunks` 只接受函数形态（对象形态是 Rolldown 的限制，纯 Vite 同样失败）。
+
 ## Options / 选项
 
 - **`pattern`** (required / 必填)

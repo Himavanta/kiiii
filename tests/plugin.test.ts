@@ -40,7 +40,7 @@ test("config：serve 命令不返回构建配置", () => {
   expect(asFn(setup().config!)({}, { command: "serve" } as never)).toBeUndefined();
 });
 
-test("config：build 命令返回双环境声明（环境模型）", () => {
+test("config：build 命令返回双环境声明（环境模型，默认 outDir）", () => {
   const cfg = asFn(setup().config!)({}, { command: "build" } as never) as {
     builder: object;
     environments: {
@@ -67,6 +67,22 @@ test("config：build 命令返回双环境声明（环境模型）", () => {
   expect(cfg.environments.client.build.outDir).toBe("dist/public");
   expect(cfg.environments.client.build.copyPublicDir).toBe(true);
   expect(cfg.ssr?.noExternal).toBe(true);
+});
+
+test("config：用户自定义 outDir 作为产物根（不覆盖）", () => {
+  const cfg = asFn(setup().config!)(
+    { build: { outDir: "build" } } as never,
+    {
+      command: "build",
+    } as never,
+  ) as {
+    environments: {
+      server: { build: { outDir: string } };
+      client: { build: { outDir: string } };
+    };
+  };
+  expect(cfg.environments.server.build.outDir).toBe("build/server");
+  expect(cfg.environments.client.build.outDir).toBe("build/public");
 });
 
 test("config：bundleDeps=false 时不传 noExternal", () => {
