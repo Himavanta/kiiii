@@ -1,10 +1,5 @@
-import { defineEventHandler, H3, serveStatic } from "h3";
-import { HTTPError, toNodeHandler } from "h3/node";
+import { defineEventHandler, H3, HTTPError } from "h3";
 import type { H3Event } from "h3";
-import { listen } from "listhen";
-import { readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { parse, stringify } from "devalue";
 import { isFunction } from "./guards.ts";
 
@@ -37,7 +32,7 @@ export interface KiiiiHandlerOptions {
 }
 
 /**
- * 创建远程调用分发 handler（h3），dev / prod 共用同一份协议。
+ * 创建远程调用分发 handler（h3），dev / prod 共用同一份协议，跨运行时（h3 core + devalue）。
  *
  * 协议（见 agent-docs/服务端函数方案.md §4.4）：
  * - POST /{prefix}/{route}，body 为 devalue 编码的位置参数数组
@@ -78,11 +73,15 @@ export function createKiiiiHandler(options: KiiiiHandlerOptions) {
     }
 
     // 取消链路：客户端断开 → abort → this.signal（函数内 throwIfAborted 提前退出）。
-    // 监听 res 的 close（仅连接在响应结束前关闭时触发；req 的 close 在请求正常完成后也会触发）
+    // node：监听 res 的 close（仅连接在响应结束前关闭时触发；req 的 close 在请求正常完成后也会触发）；
+    // web：监听请求信号的 abort（h3 推荐的跨运行时方式）
     const controller = new AbortController();
-    const res = event.runtime?.node?.res;
-    if (res) {
-      res.on("close", () => controller.abort());
+    const nodeRes = event.runtime?.node?.res;
+    if (nodeRes) {
+      nodeRes.on("close", () => controller.abort());
+    } else if (event.req.signal) {
+      if (event.req.signal.aborted) controller.abort();
+      else event.req.signal.addEventListener("abort", () => controller.abort());
     }
 
     // 解析参数：devalue 编码的位置参数数组（无 body 时为空数组）
@@ -140,86 +139,46 @@ export function createKiiiiHandler(options: KiiiiHandlerOptions) {
   });
 }
 
-// ==================== 服务器入口封装（createKiiiiServer） ====================
-// 默认形态：插件虚拟入口（kiiii:server）调用本函数，用户项目零服务器代码。
+// ==================== 无状态 app 组装（createKiiiiApp） ====================
+// 默认形态：插件虚拟入口（kiiii:server / kiiii:app）调用本函数，用户项目零服务器代码。
 // 逃生舱（高级用法）：自写服务器入口手动组装：
 //
 // ```ts
-// import { createKiiiiServer } from "kiiii";
-// await createKiiiiServer({
+// import { createKiiiiApp } from "kiiii/server";
+// const app = createKiiiiApp({
 //   prefix: "kiiii",
 //   modules: { "api/greet": () => import("./src/api/greet.server.ts") },
 // });
 // ```
 
-/** 极简 MIME 表（覆盖 Vite 产物常见类型） */
-const MIME: Record<string, string> = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".webp": "image/webp",
-  ".gif": "image/gif",
-  ".ico": "image/x-icon",
-  ".woff": "font/woff",
-  ".woff2": "font/woff2",
-  ".ttf": "font/ttf",
-  ".json": "application/json",
-  ".map": "application/json",
-  ".txt": "text/plain; charset=utf-8",
-  ".webmanifest": "application/manifest+json",
-};
-
-function mimeFromExt(file: string): string {
-  const dot = file.lastIndexOf(".");
-  return dot >= 0
-    ? (MIME[file.slice(dot)] ?? "application/octet-stream")
-    : "application/octet-stream";
-}
-
-/**
- * serveStatic 的 fs 后端。staticBase 为静态资源目录的 file: URL。
- * id 以 "/" 开头（如 /assets/index.js），去掉前导斜杠后相对 staticBase 解析，
- * 否则 new URL 会把它当根绝对路径（file:///assets/...）导致 stat 失败。
- * id 保持 percent-encoded（安全要求见 h3 文档，不得解码）。
- */
-function staticBackend(staticBase: URL) {
-  const resolve = (id: string) => new URL(id.replace(/^\//, ""), staticBase);
-  return {
-    fallthrough: true,
-    getMeta: async (id: string) => {
-      try {
-        const info = await stat(resolve(id));
-        if (!info.isFile()) return undefined;
-        return {
-          type: mimeFromExt(id),
-          size: info.size,
-          mtime: info.mtime,
-          // 弱 etag（size + mtime 派生），serveStatic 据此处理 If-None-Match → 304
-          etag: `W/"${info.size}-${info.mtimeMs}"`,
-        };
-      } catch {
-        return undefined;
-      }
-    },
-    getContents: async (id: string) => {
-      try {
-        return await readFile(resolve(id));
-      } catch {
-        return null;
-      }
-    },
-  };
-}
-
-export interface KiiiiServerOptions {
+export interface KiiiiAppOptions {
   /** 路由 → 模块加载器（默认形态由插件虚拟模块提供） */
   modules: KiiiiModuleMap;
   /** URL 前缀，默认 "kiiii"（端点形如 /kiiii/{hash}） */
   prefix?: string;
+  /** 开发模式：意外错误泄漏 message 便于调试，默认 false */
+  isDev?: boolean;
+}
+
+/**
+ * 组装远程调用 app（纯 RPC，无状态）：h3 app + 分发 handler。
+ * 跨运行时（h3 core + devalue，零 node 依赖）——平台部署（Vercel / Cloudflare 等）
+ * 用它拿 app 后自行包装（toNodeHandler / toWebHandler），静态资源由平台负责。
+ */
+export function createKiiiiApp(options: KiiiiAppOptions): H3 {
+  const prefix = options.prefix ?? "kiiii";
+  const app = new H3();
+  app.use(
+    `/${prefix}/**`,
+    createKiiiiHandler({ modules: options.modules, prefix, isDev: options.isDev ?? false }),
+  );
+  return app;
+}
+
+// ==================== 自托管启动（startServer / createKiiiiServer） ====================
+// node 专属（静态服务 + listhen 监听）：依赖全部动态加载，平台产物不引入本路径。
+
+export interface KiiiiServerOptions extends KiiiiAppOptions {
   /**
    * 静态资源目录。默认约定：{项目根}/dist/clients（服务器产物在打包根 dist，
    * 从项目根启动 `node dist/index.js` 时 ./clients 即客户端产物）。
@@ -228,8 +187,29 @@ export interface KiiiiServerOptions {
   staticDir?: string | URL;
   /** 监听端口，默认 process.env.PORT ?? 3000 */
   port?: number;
-  /** 开发模式：意外错误泄漏 message 便于调试，默认 false */
-  isDev?: boolean;
+}
+
+/** startServer 选项：只关心静态目录与端口（app 已组装，无需 modules） */
+export interface StartServerOptions {
+  staticDir?: string | URL;
+  port?: number;
+}
+
+/**
+ * 自托管启动：静态资源 + SPA fallback + listhen 监听（单端口）。
+ * node 依赖（h3/node、listhen、node:fs）在此动态加载——仅自托管路径触发。
+ */
+export async function startServer(app: H3, options: StartServerOptions = {}): Promise<void> {
+  const port = options.port ?? Number(process.env.PORT ?? 3000);
+  const [{ mountStatic }, { toNodeHandler }, { listen }, { join }] = await Promise.all([
+    import("./static.ts"),
+    import("h3/node"),
+    import("listhen"),
+    import("node:path"),
+  ]);
+  const staticDir = options.staticDir ?? join(process.cwd(), "dist", "clients");
+  mountStatic(app, staticDir);
+  await listen(toNodeHandler(app), { port, hostname: "0.0.0.0" });
 }
 
 /**
@@ -241,34 +221,7 @@ export interface KiiiiServerOptions {
  * 构建：单个 vp build（插件 buildApp 钩子接管，虚拟入口为 SSR 构建 input）
  */
 export async function createKiiiiServer(options: KiiiiServerOptions): Promise<H3> {
-  const prefix = options.prefix ?? "kiiii";
-  const isDev = options.isDev ?? false;
-  const port = options.port ?? Number(process.env.PORT ?? 3000);
-  // 静态资源基址（file: URL）：默认约定 {项目根}/dist/clients；自定义时接受绝对路径或 URL。
-  // 必须保证以 "/" 结尾：new URL(相对, base) 相对解析把无尾斜杠的 base 末段当文件名
-  const staticDir = options.staticDir ?? join(process.cwd(), "dist", "clients");
-  const staticRaw = staticDir instanceof URL ? staticDir.href : pathToFileURL(staticDir).href;
-  const staticBase = new URL(staticRaw.endsWith("/") ? staticRaw : `${staticRaw}/`);
-
-  // 1. 远程调用：.server.ts 构建时全部打包（import.meta.glob），请求时 lazy 加载分发
-  const app = new H3();
-  app.use(`/${prefix}/**`, createKiiiiHandler({ modules: options.modules, prefix, isDev }));
-
-  // 2. 静态资源（{打包根}/client）
-  app.use(
-    "/**",
-    defineEventHandler((event) => serveStatic(event, staticBackend(staticBase))),
-  );
-
-  // 3. SPA fallback：history 路由的未命中路径 → index.html
-  app.use(
-    "/**",
-    defineEventHandler(async (event) => {
-      event.res.headers.set("content-type", "text/html; charset=utf-8");
-      return await readFile(new URL("index.html", staticBase), "utf-8");
-    }),
-  );
-
-  await listen(toNodeHandler(app), { port, hostname: "0.0.0.0" });
+  const app = createKiiiiApp(options);
+  await startServer(app, options);
   return app;
 }

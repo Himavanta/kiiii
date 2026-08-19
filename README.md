@@ -189,6 +189,38 @@ The trade-offs: the payload is not standard JSON (Content-Type is `text/plain`),
 - 自包含部署：依赖默认全量打包进服务器产物（`bundleDeps: false` 切换为 external）。
 - 业务错误协议：`KiiiiError` 跨网络还原（200 + 信封）；意外错误不泄漏。
 
+## Deployment / 部署
+
+Two entry artifacts are produced by one `vp build`: `dist/index.js` (self-hosted) and `dist/app.js` (stateless app for platform deployment). The stateless app only handles remote calls — static assets and history-route fallback are the platform's job (Vercel `public`, Cloudflare assets, etc.).
+
+一次 `vp build` 产出两个入口产物：`dist/index.js`（自托管）与 `dist/app.js`（无状态 app，供平台部署）。无状态 app 只处理远程调用——静态资源与 history 路由回退由平台负责（Vercel `public`、Cloudflare assets 等）。
+
+**Self-hosted (default):**
+
+**自托管（默认）：**
+
+```bash
+vp build
+node dist/index.js   # single port: remote calls + static + SPA fallback
+PORT=8080 node dist/index.js   # custom port
+```
+
+**Platform deployment (Vercel, Node Functions):**
+
+**平台部署（以 Vercel Node Functions 为例）：**
+
+```js
+// api/index.js — import the built app and hand it to the platform
+import { toNodeHandler } from "h3/node";
+import app from "../dist/app.js";
+
+export default toNodeHandler(app);
+```
+
+The platform entry is a plain file in your project (a few lines) — the plugin never generates it, since every platform has its own conventions. Cloudflare Workers / EdgeOne (Web runtime) are planned via `toWebHandler` but not yet verified — the stateless entry still references some Node-only code paths.
+
+平台入口是项目里的普通文件（几行代码）——插件不生成它，因为各平台约定不同。Cloudflare Workers / EdgeOne（Web 运行时）计划通过 `toWebHandler` 支持，尚未验证——无状态入口仍引用少量 Node 专属代码路径。
+
 ## Development / 开发
 
 Build, test, and check the package itself:
