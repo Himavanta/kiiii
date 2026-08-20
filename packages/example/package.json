@@ -7,7 +7,8 @@
     "dev": "vp dev",
     "build": "tsc && vp build",
     "preview": "vp preview",
-    "prebuild": "cd ../.. && pnpm exec vp pack"
+    "prebuild": "cd ../.. && pnpm exec vp pack",
+    "build:edgeone": "node build-edgeone.mjs"
   },
   "devDependencies": {
     "h3": "catalog:",

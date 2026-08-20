@@ -274,6 +274,34 @@ The stateless entry has zero Node dependencies in its chunk graph (verified), an
 
 无状态入口的 chunk 依赖图零 node 引用（已实测），h3 的 web 适配经 `workerd` 条件导出解析——已在 `node --conditions=workerd` 下验证加载与远程调用。真实 Cloudflare 部署尚未实测；`wrangler` 可能需少量配置调整。
 
+**EdgeOne (Tencent edge runtime):**
+
+**EdgeOne（腾讯云边缘运行时）：**
+
+```js
+// edgeone.js — Service Worker style entry (EdgeOne console convention)
+import { toWebHandler } from "h3";
+import app from "./dist/server/index.js";
+
+const handler = toWebHandler(app);
+
+addEventListener("fetch", (event) => {
+  event.respondWith(handler(event.request));
+});
+```
+
+EdgeOne edge functions only accept pasted single-file code (no dependency install step), so the entry is bundled into one self-contained file (h3 fully inlined via the same `workerd` export condition verified for Cloudflare):
+
+EdgeOne 边缘函数只接受粘贴的单文件代码（无依赖安装步骤），因此入口需打包为零依赖单文件（h3 经 `workerd` 条件全量内联——与 Cloudflare 验证路径一致）：
+
+```bash
+pnpm build:edgeone   # → dist/server/edgeone.js (single file, zero imports — verified)
+```
+
+Paste `dist/server/edgeone.js` into the EdgeOne console as the function code, bind a trigger rule with URL path prefix `/kiiii/`, and serve `dist/public` from the site origin (e.g. COS) — non-RPC requests bypass the function entirely. Remote calls, business-error envelopes, and 404 verified locally with the EdgeOne event model stubbed. Not tested on a real EdgeOne account (needs a Tencent Cloud one); note the edge-function limits: 5 MB code bundle, 200 ms CPU, 1 MB request body.
+
+把 `dist/server/edgeone.js` 粘贴到 EdgeOne 控制台作为函数代码，触发规则绑定 URL 路径前缀 `/kiiii/`，静态资源（`dist/public`）由站点源站（如 COS）服务——非 RPC 请求完全不经过函数。已用 EdgeOne 事件模型 stub 本地验证远程调用、业务错误信封与 404。尚未在真实 EdgeOne 账号上实测（需腾讯云账号）；注意边缘函数限制：代码包 5 MB、CPU 200 ms、请求 body 1 MB。
+
 ## Development / 开发
 
 Build, test, and check the package itself:
