@@ -118,14 +118,14 @@ The costs: the payload is not standard JSON (Content-Type is `text/plain`), only
 
 ## Deployment / 部署
 
-One `vp build` produces two output trees: `dist/public/` (client assets — served by the platform or the self-hosted server) and `dist/server/` (server entries: `start.js` for self-hosting, `index.js` the stateless app for platforms). The stateless app only handles remote calls — static assets and history-route fallback are the platform's job.
+One `vite build` produces two output trees: `dist/public/` (client assets — served by the platform or the self-hosted server) and `dist/server/` (server entries: `start.js` for self-hosting, `index.js` the stateless app for platforms). The stateless app only handles remote calls — static assets and history-route fallback are the platform's job.
 
-一次 `vp build` 产出两个产物目录：`dist/public/`（客户端资源——由平台或自托管服务器服务）与 `dist/server/`（服务器入口：`start.js` 自托管用、`index.js` 是给平台的无状态 app）。无状态 app 只处理远程调用——静态资源与 history 路由回退由平台负责。
+一次 `vite build` 产出两个产物目录：`dist/public/`（客户端资源——由平台或自托管服务器服务）与 `dist/server/`（服务器入口：`start.js` 自托管用、`index.js` 是给平台的无状态 app）。无状态 app 只处理远程调用——静态资源与 history 路由回退由平台负责。
 
 **Self-hosted (default) / 自托管（默认）：**
 
 ```bash
-vp build
+vite build
 node dist/server/start.js   # one port: remote calls + static + SPA fallback
 PORT=8080 node dist/server/start.js   # custom port
 ```

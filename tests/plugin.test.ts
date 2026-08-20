@@ -1,5 +1,5 @@
 // 插件单元测试：config / configResolved / resolveId / load 钩子与生成代码（不经 Vite 实例）。
-// buildApp 钩子（双环境构建）由 example build 端到端覆盖。
+// 双环境构建（纯 vite：vite 8 自动构建所有声明环境）由 example build 端到端覆盖。
 import { expect, test } from "vite-plus/test";
 import type { Plugin, ResolvedConfig } from "vite";
 import { kiiii, type KiiiiOptions } from "../src/index.ts";
@@ -56,6 +56,7 @@ test("config：build 命令返回双环境声明（环境模型，默认 outDir�
     };
     ssr?: { noExternal: boolean };
   };
+  // builder 开关是 vite-plus 非 legacy 兼容（纯 vite 忽略该字段）
   expect(cfg.builder).toEqual({});
   expect(cfg.environments.server.build.ssr).toBe(true);
   expect(cfg.environments.server.build.rolldownOptions.input).toEqual({

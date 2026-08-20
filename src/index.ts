@@ -106,14 +106,15 @@ export function kiiii(options?: KiiiiOptions): Plugin {
      * - server：kiiii 私有空间——SSR + 虚拟入口 + 产物 {outDir}/server
      * - client：用户空间——outDir 重定向到 {outDir}/public（其余 input/plugins/alias 等原样）
      * 用户 outDir 用作产物根（默认 dist）：kiiii 只在其中建 public/server 两个子目录，不覆盖用户值。
-     * 用户配置零覆盖循环：客户端入口天然保留（无需保存/恢复），服务器入口只混入用户根 input（buildApp 收窄）
+     * 纯 vite 构建：vite 8 自动构建所有声明环境——环境级 input 覆盖根 input（无污染），无需额外钩子。
      */
     config(_userConfig, env) {
       if (env.command !== "build") return;
       // 用户 outDir（相对 root）作为产物根；kiiii 的 public/server 子目录基于它拼接
       const userOutDir = _userConfig.build?.outDir ?? "dist";
       return {
-        builder: {}, // 启用 Vite 8 原生 builder（非 legacy）
+        // vite-plus 非 legacy 开关（vite-plus 的 vp build 需要；纯 vite 忽略该字段）
+        builder: {},
         environments: {
           server: {
             build: {
@@ -143,19 +144,22 @@ export function kiiii(options?: KiiiiOptions): Plugin {
       };
     },
 
-    /** 构建 kiiii 声明的双环境：先服务器（dist/server），后客户端（dist/public）——emptyOutDir 天然隔离，顺序自由 */
+    /**
+     * vite-plus 兼容层（纯 vite 的 vite 8 官方构建自动处理：环境级 input 覆盖根、默认 ssr 不构建——此钩子不运行）：
+     * vp build 会把默认 ssr 环境（html input）加入构建——此处跳过未声明环境，只构建 server/client。
+     */
     async buildApp(builder) {
       const server = builder.environments["server"];
       const client = builder.environments["client"];
       if (!server || !client) {
         throw new Error("[kiiii] server / client 环境未声明");
       }
-      // 服务器 input 收窄为虚拟入口：Vite 8 根 build 配置是环境默认（用户根 input 会深合并进来）
+      // 服务器 input 收窄为虚拟入口：vite-plus 的配置合并会把用户根 input 混入
       server.config.build.rolldownOptions = {
         ...server.config.build.rolldownOptions,
         input: { start: START_MODULE, index: APP_MODULE },
       };
-      // Vite 8 内置默认 ssr 环境（input 为默认 index.html）跳过——kiiii 只构建声明的两个环境
+      // 未声明的环境（含 vite 8 内置默认 ssr 环境——input 为默认 index.html）跳过
       for (const env of Object.values(builder.environments)) {
         if (env !== server && env !== client) env.isBuilt = true;
       }
