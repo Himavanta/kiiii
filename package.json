@@ -1,6 +1,6 @@
 {
   "name": "kiiii",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Server actions for Vite: write functions in any file and call them directly from the client - type-safe (types from original signatures), devalue serialization, dev/prod consistent",
   "keywords": [
     "api",
@@ -52,18 +52,18 @@
     "prepare": "vp config"
   },
   "dependencies": {
-    "devalue": "^5.9.0",
-    "h3": "2.0.1-rc.26",
+    "devalue": "^6.0.3",
+    "h3": "catalog:",
     "listhen": "^1.10.1"
   },
   "devDependencies": {
-    "@types/node": "^26.1.1",
-    "bumpp": "^11.1.0",
+    "@types/node": "^26.6.5",
+    "bumpp": "^12.3.0",
     "typescript": "^7.0.2",
     "vite-plus": "catalog:"
   },
   "peerDependencies": {
     "vite": "catalog:"
   },
-  "packageManager": "pnpm@11.22.0"
+  "packageManager": "pnpm@12.15.0"
 }

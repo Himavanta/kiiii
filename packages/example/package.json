@@ -12,9 +12,9 @@
   "devDependencies": {
     "h3": "catalog:",
     "kiiii": "workspace:*",
-    "typescript": "~6.0.2",
+    "typescript": "~7.0.2",
     "vite": "catalog:",
     "vite-plus": "catalog:"
   },
-  "packageManager": "pnpm@11.22.0"
+  "packageManager": "pnpm@12.15.0"
 }
